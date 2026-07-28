@@ -1,0 +1,15 @@
+.venv/*
+config.py
+token.pickle
+rclone.conf
+.netrc
+log.txt
+accounts/*
+Thumbnails/*
+rclone/*
+tokens/*
+sabnzbd/*
+list_drives.txt
+cookies.txt
+downloads/*
+*.session
