@@ -1,218 +1,302 @@
-<div align="center">
-<!-- <img src="https://i0.wp.com/gluonhq.com/wp-content/uploads/2018/05/heroku-logotype-vertical-purple.png" alt="Heorku Image" align="right" width="150">-->
+<p align="center">
+   <img src="docs/WZML-X.png" alt="WZML-X logo" width="420">
+</p>
 
-# ⚕️ ***HEROKU DEPLOY GUIDE***
+<h1 align="center">WZML-X</h1>
 
-</div>
+<p align="center">
+   Telegram mirroring and leeching platform with a container-based runtime, a lightweight web UI, and a configurable transfer pipeline.
+</p>
 
----
+<p align="center">
+   <a href="https://github.com/SilentDemonSD/WZML-X">
+      <img src="https://img.shields.io/github/stars/SilentDemonSD/WZML-X?style=for-the-badge&logo=github&label=Stars" alt="Stars">
+   </a>
 
-### 1️⃣ ***METHOD 1: (Google Collab Guide)***
+   <a href="https://github.com/SilentDemonSD/WZML-X/search?l=python">
+      <img src="https://img.shields.io/github/languages/top/SilentDemonSD/WZML-X?style=for-the-badge&logo=python&label=Python" alt="Python">
+   </a>
 
-<details>
-  <summary><b>Expand All Steps to Deploy <sup><kbd>Click Here</kbd></sup></b></summary>
+   <a href="https://github.com/SilentDemonSD/WZML-X/blob/main/docker-compose.yml">
+      <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker Compose">
+   </a>
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SilentDemonSD/WZ-Deploy/blob/main/wzv3_hk_deploy.ipynb)
+   <a href="https://t.me/WZML_X">
+      <img src="https://img.shields.io/badge/Telegram-Community-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram">
+   </a>
 
-**Step 1 :** 
+   <a href="https://github.com/SilentDemonSD/WZML-X/blob/main/LICENSE">
+      <img src="https://img.shields.io/github/license/SilentDemonSD/WZML-X?style=for-the-badge&label=License" alt="License">
+   </a>
 
+   <a href="https://github.com/SilentDemonSD/WZML-X/commits/main">
+      <img src="https://img.shields.io/github/last-commit/SilentDemonSD/WZML-X?style=for-the-badge&label=Last%20Commit" alt="Last Commit">
+   </a>
+</p>
 
+## Index
 
+<details open>
+   <summary>Table of Contents <kbd>Click Here</kbd></summary>
+
+   - [At a Glance](#at-a-glance)
+   - [Why Use It](#why-use-it)
+   - [What It Covers](#what-it-covers)
+   - [How It Runs](#how-it-runs)
+   - [Deployment](#deployment)
+   - [Configuration](#configuration)
+   - [Project Layout](#project-layout)
+   - [Documentation](#documentation)
+   - [Support](#support)
+   - [Credits](#credits)
+   - [License](#license)
 </details>
 
----
+## At a Glance
 
-### 2️⃣ ***METHOD 2: (Github Workflow Guide)***
+| Area | Details |
+|---|---|
+| Runtime | Python Telegram bot + web UI |
+| Deployment | Docker & Docker Compose (buildx) |
+| Required config | `BOT_TOKEN`, `TELEGRAM_API`, `TELEGRAM_HASH`, `OWNER_ID`, `DATABASE_URL` |
+| License | [LICENSE](LICENSE) |
 
-<details>
-  <summary><b>Expand All Steps to Deploy <sup><kbd>Click Here</kbd></sup></b></summary>
+## Why Use It
 
-**Step 1 :** Fork and Star the Repository
+WZML-X is built for users who want a single bot stack that can mirror, leech, manage files, and expose a simple web-based selection flow without stitching together multiple tools. The README focuses on what you need to deploy it quickly, understand the moving parts, and tune the behavior safely.
 
-  - Click the **Fork** button at the top-right corner of this repository.
-    > Star the repository to show your support.
+## What It Covers
 
-**Step 2 :** Navigate to Your Forked Repository
+| Capability | Outcome |
+|---|---|
+| Mirroring | Send files to Telegram with a controllable pipeline |
+| Leeching | Deliver files in the format you prefer, including document and media workflows |
+| File selection UI | Review and select torrent / NZB / upload contents before finalizing |
+| Multi-source downloads | Use qBittorrent, Aria2, JDownloader, Mega, NZB, and yt-dlp integrations |
+| Storage and upload paths | Push content to Google Drive, Rclone, Mega, and other supported routes |
+| Automation | Limit tasks, tune queues, and manage startup updates from one config layer |
 
-- Access your forked version of the repository.
+## How It Runs
 
-**Step 3 :** Enable `GitHub Actions` for your repo
-
-- Go to the **Settings** tab of your forked repository.
-- Enable **Actions** by selecting the appropriate option in the settings.
-
-**Step 4 :** Run the Deployment Workflow to Deploy
-
-  1. Open the **Actions** tab.
-  2. Select the `Deploy to Heroku` workflow from the available list.
-  3. Click **Run workflow** and fill out the required inputs:
-     
-   - **BOT_TOKEN**: Your Telegram bot token.
-   - **OWNER_ID**: Your Telegram ID.
-   - **DATABASE_URL**: MongoDB connection string.
-   - **TELEGRAM_API**: Telegram API ID (from [my.telegram.org](https://my.telegram.org/)).
-   - **TELEGRAM_HASH**: Telegram API hash (from [my.telegram.org](https://my.telegram.org/)).
-   - **HEROKU_APP_NAME**: Name of your Heroku app.
-   - **HEROKU_EMAIL**: Email address associated with your Heroku account.
-   - **HEROKU_API_KEY**: API key from your Heroku account.
-   - **HEROKU_TEAM_NAME** (Optional): Required only if deploying under a Heroku team account.
-   - **UPSTREAM_REPO**: Upstream Repo of your Fork or Main Repo
-     
-  4. Run the workflow and wait for it to complete.
-
-
-**Step 5 :** Finalize Setup of your bot
-
-- After deployment, check logs in your Heroku dashboard, If problem, Reach to Support Group.
-- Use the `/bsettings` command to upload sensitive files like `token.pickle` if needed as well as all the important Variables within it.
-  > **NOTE** : Don't Add any Other variable except the Variables mentioned here.
-
-
-</details>
-
----
-
-### 3️⃣ ***METHOD 3: (Heroku CLI Guide)***
+Deploy with Docker and provide the required configuration values. The container takes care of the runtime path, so users only need to build or start the image and set their settings.
 
 <details>
-  <summary><b>Expand All Steps to Deploy <sup><kbd>Click Here</kbd></sup></b></summary>
+   <summary>What you need <kbd>Click Here</kbd></summary>
 
-**Step 1 :** Git clone this Repo and change directory
-> Make sure git is Installed in your system or quick run `apt-get install git pip curl -y`
-
-```shell
-git clone https://github.com/SilentDemonSD/WZ-Deploy wzbot && cd wzbot
-```
-
-**Step 2 :** Now Install Heroku in your Sytem or checkout Official Heroku Deploy Docs, or Download via `apt-get` or `npm`
-> For Android : Use `termux` (Download via FDroid) for CLI usage
-
-**The script requires sudo and isn’t Windows compatible.**
-```shell
-curl https://cli-assets.heroku.com/install.sh | sh
-```
-
-**Install with Ubuntu / Debian apt-get**
-```shell
-curl https://cli-assets.heroku.com/install-ubuntu.sh | sh
-```
-
-**Install via `npm` (Not Recommanded)**
-```shell
-npm install -g heroku
-```
-
-**Official Heroku Install Guide :** [Check Here](https://devcenter.heroku.com/articles/heroku-cli#install-the-heroku-cli)
-
-**Step 3 :** Login into Heroku and Log In CLI via Browser 
-
-_With Browser_
-```shell
-heroku login
-```
-
-**OR**
-
-_Without Browser_
-```shell
-heroku login -i
-```
-
-- Put `Heroku Email` : Heroku Email `email@example.com`
-- Put `Heroku Password` : Heroku API Key. Get from [Here](https://dashboard.heroku.com/account)
-
-**Step 4 :** Create Heroku App and specify stack and region with App Name
-
-```shell
-heroku create --region us --stack container APP_NAME
-```
-
-**To Be Noted**: Copy the `BASE_URL` after the App is Created and Put the Value in `BASE_URL` when editing `config.py`
-
-**Notes:**
-- `--region eu` for Europe Server.
-- `--region us` for United States Server.
-- `APP_NAME` should be replaced with your unique app name _(Optional)_. If not given it generates a random name.
-- `--stack container` for setting stack to container for Dockerfile.
-- `--buildpack heroku/python` for using build slug for repo deploy and build.
-
-**Step 5 :** Now set all the Required Variables and Files into this Branch MAIN Repo like config.py, accounts.zip, token.pickle, All Private Files(optional)- 
-  > Only config.py Mabdatory with Only Mandatory Vars Only, After that Put all Private Files or Vars via Bot Settings `/bs`
-
-**To Edit Inside CLI (nano Editor):** _(Termux Users)_
-```shell
-nano config.py
-```
-- **Sample config.py** _(Copy these and Paste in Editor and Fill Up)_
-  ```
-  BOT_TOKEN = ""
-  TELEGRAM_API = 0
-  TELEGRAM_HASH = ""
-  OWNER_ID = 0
-  UPSTREAM_REPO = ""
-  UPSTREAM_BRANCH = "wzv3"
-  DATABASE_URL = ""
-  BASE_URL = ""
-  ```
-- After Setup Save from Editor via `CTRL + O` and `Enter`, followed via `CTRL + X` !
-
-**Helpful Commands:**
-- **Exit from nano** : `CTRL + X`
-- **Save File** : `CTRL + O`
-- **Check Help** : `CTRL + G`
-- **Undo Changes** : `ALT + U`
-- ^ means CTRL _(Termux Users)_
-
-**Step 6 :** Set Local git remote for Heroku. Give All Commands One by One.
-
-```shell
-git add . -f
-git commit -m "HK Setup"
-heroku git:remote -a APP_NAME
-```
-
-**Step 7 :** Now push to Heroku via git forcefully to build.
-
-```shell
-git push heroku main -f
-```
-
-**Heroku Logs:** When checking Logs, Use this will give Complete Logs.
-```shell
-heroku logs -a APP_NAME -t
-```
-
-- Add arg `-t` for Live Stream Logs and Use `CTRL + C` to Exit from it.
-
-**All Heroku CLI Commands :** [Click Here](https://devcenter.heroku.com/articles/heroku-cli-commands#heroku-config-set)
-
+   - Docker installed
+   - Your Telegram bot token and Telegram API credentials
+   - A MongoDB connection string
+   - The optional service credentials you want to enable, such as Drive, Rclone, Mega, JDownloader, or SABnzbd
 </details>
 
----
+## Deployment
 
-### 🔠 ***Variables Description:***
+<details open>
+   <summary>VPS / Dedicated Server (Recommended)</summary>
+
+   ```bash
+   git clone https://github.com/SilentDemonSD/WZML-X.git
+   cd WZML-X
+   cp config_sample.py config.py
+   # Edit config.py with your values
+   docker buildx compose up -d
+   ```
+
+   The bot runs behind a Cloudflare quick tunnel by default. Check the tunnel URL:
+
+   ```bash
+   docker compose logs tunnel
+   ```
+
+   You'll see a `https://*.trycloudflare.com` URL — that's your bot's web UI.
+
+   To stop:
+
+   ```bash
+   docker buildx compose down
+   ```
+</details>
 
 <details>
-  <summary><b>View All Variables <sup><kbd>Click Here</kbd></sup></b></summary>
+   <summary>VPS with VPN (Gluetun)</summary>
 
-- `BOT_TOKEN`: Telegram Bot Token that you got from [BotFather](https://t.me/BotFather). `Str`
-- `OWNER_ID`: Telegram User ID (not username) of the Owner of the bot. `Int`
-- `TELEGRAM_API`: This is to authenticate your Telegram account for downloading Telegram files. You can get this from <https://my.telegram.org>. `Int`
-- `TELEGRAM_HASH`: This is to authenticate your Telegram account for downloading Telegram files. You can get this from <https://my.telegram.org>. `Str`
-- `BASE_URL`: Valid BASE URL where the bot is deployed to use torrent web files selection. Format of URL should be `https://app-name-random_code.herokuapp.com/`, where `app-name` is the name of your heroku app Paste the URL got when the App was Made. `Str`
-- `DATABASE_URL`: Database URL of MongoDb to store all your files and Vars. Adding this will be Helpful. `Str`
-- `UPSTREAM_REPO`: GitLab repository URL, if your repo is private add `https://<deploy_token>:<password>@gitlab.com/<your_username>/<repository_name>` format. `Str`.
-    - **NOTE**: Don't forget to remove '<' and '>'. To generate gitlab Deploy Token. Follow [This](https://docs.gitlab.com/ee/user/project/deploy_tokens/#create-a-deploy-token)
-        - Any change in docker you need to deploy/build again with updated repo to take effect. 
-        - **No Need to delete .gitignore file or any File**
-- `UPSTREAM_BRANCH`: Upstream branch for update. Default is `wzv3`. `Str`
+   1. Uncomment the `gluetun` service in `docker-compose.yml`
+   2. Fill in your VPN provider credentials
+   3. Set `network_mode: "service:gluetun"` on the `app` service
+   4. Start:
 
+   ```bash
+   docker buildx compose up -d
+   ```
+
+   All traffic (including the cloudflared tunnel) routes through the VPN.
 </details>
 
----
+<details>
+   <summary>Multi-Instance (Multiple Bots)</summary>
 
-### ⚠️ ***Branch Specifications:***
+   Each bot needs its own `config.py` and data volumes. Example for a second bot:
 
-- All files to be Uploaded in this `main` Branch and set Upstream as `wzv3` Branch of actual repo.
+   1. Create `config2.py` with different `BOT_TOKEN`, `OWNER_ID`, etc.
+   2. Uncomment `app2` and `tunnel2` in `docker-compose.yml`
+   3. Edit volume mounts to use `config2.py` and separate data dirs
+   4. Start:
 
----
+   ```bash
+   docker buildx compose up -d
+   ```
+
+   Each bot gets its own cloudflared tunnel URL. Admin ports (qBittorrent, SABnzbd) are mapped to different host ports (`127.0.0.1:8091`, etc.).
+</details>
+
+<details>
+   <summary>Single Container (Manual)</summary>
+
+   ```bash
+   git clone https://github.com/SilentDemonSD/WZML-X.git
+   cd WZML-X
+   docker build -t wzmlx .
+   docker run -p 8080:8080 wzmlx
+   ```
+</details>
+
+<details>
+   <summary>Deployment Notes</summary>
+
+   1. If you use qBittorrent, tune `AsyncIOThreadsCount` to your machine size.
+   2. Stop the container before removing it, and remove the container before pruning images.
+   3. Useful cleanup commands:
+
+   ```bash
+   docker container prune
+   docker image prune -a
+   ```
+</details>
+
+<details>
+   <summary>Legacy Workflow Guide</summary>
+
+   Some users still rely on the external workflow path referenced by the previous README:
+
+   - [WZ Deploy workflow guide](https://github.com/SilentDemonSD/WZ-Deploy/tree/main?tab=readme-ov-file#2%EF%B8%8F%E2%83%A3-method-2-github-workflow-guide)
+
+   Keep this only if that workflow still matches your deployment style.
+</details>
+
+## Configuration
+
+Start with the required values:
+
+- `BOT_TOKEN`
+- `TELEGRAM_API`
+- `TELEGRAM_HASH`
+- `OWNER_ID`
+- `DATABASE_URL`
+
+Then tune the optional behavior from `config_sample.py`.
+
+<details>
+   <summary>Important user-facing settings</summary>
+
+   | Setting | User impact |
+   |---|---|
+   | `DEFAULT_LANG` | Bot language |
+   | `STATUS_LIMIT` | How much status data is shown |
+   | `DEFAULT_UPLOAD` | Default upload target |
+   | `LEECH_SPLIT_SIZE` | How large leech outputs are split |
+   | `QUEUE_ALL`, `QUEUE_DOWNLOAD`, `QUEUE_UPLOAD` | Queue pressure and concurrency |
+   | `SHOW_CLOUD_LINK` | Whether cloud links are shown to users |
+   | `WEB_PINCODE` | Protects web access to file selection |
+</details>
+
+<details>
+   <summary>Integrations available in config</summary>
+
+   The sample config also covers:
+
+   - qBittorrent and Aria2-related controls
+   - JDownloader login details
+   - Mega credentials
+   - SABnzbd server definitions
+   - Google Drive settings
+   - RSS, search, media metadata, and logging controls
+</details>
+
+## Project Layout
+
+| Path | Purpose |
+|---|---|
+| `bot/` | Bot core, handlers, listeners, and modules |
+| `web/` | FastAPI app, templates, and the file selector UI |
+| `gen_scripts/` | Setup helpers for sessions, tokens, and drive configuration |
+| `plugins/` | Optional bot plugins |
+| `qBittorrent/` | Default qBittorrent configuration |
+| `sabnzbd/` | Default SABnzbd configuration |
+
+## Documentation
+
+> [!NOTE]
+> This documentation is still being expanded.
+
+- Full guides: `docs/`
+- Deployment notes: the docs site linked from the repository at WZ Docs
+- Configuration reference: `config_sample.py`
+
+## Support
+
+<details>
+   <summary>Join Community</summary>
+
+   - Telegram channel: https://t.me/WZML_X
+   - Support group: https://t.me/WZML_Support
+</details>
+
+## Credits
+
+WZML-X is a fork of [mirror-leech-telegram-bot](https://github.com/anasty17/mirror-leech-telegram-bot). The base project belongs to [anasty17](https://github.com/anasty17) and upstream contributors.
+
+<details>
+   <summary>Bot Authors</summary>
+
+   <table>
+      <thead>
+         <tr>
+            <th>Avatar</th>
+            <th>Name</th>
+            <th>Role</th>
+            <th>Profile</th>
+         </tr>
+      </thead>
+      <tbody>
+         <tr>
+            <td><img src="https://avatars.githubusercontent.com/u/105407900?v=4" width="72" alt="SilentDemonSD"></td>
+            <td>SilentDemonSD</td>
+            <td>Author, UI design, and custom features</td>
+            <td><a href="https://github.com/SilentDemonSD">GitHub</a></td>
+         </tr>
+         <tr>
+            <td><img src="https://avatars.githubusercontent.com/u/93116400?v=4" width="72" alt="RjRiajul"></td>
+            <td>RjRiajul</td>
+            <td>Co-author and maintainer</td>
+            <td><a href="https://github.com/rjriajul">GitHub</a></td>
+         </tr>
+         <tr>
+            <td><img src="https://avatars.githubusercontent.com/u/113664541?v=4" width="72" alt="CodeWithWeeb"></td>
+            <td>CodeWithWeeb</td>
+            <td>Feature expansion and wrap-up improvements</td>
+            <td><a href="https://github.com/weebzone">GitHub</a></td>
+         </tr>
+         <tr>
+            <td><img src="https://avatars.githubusercontent.com/u/84721324?v=4" width="72" alt="Maverick"></td>
+            <td>Maverick</td>
+            <td>Co-author and bug testing</td>
+            <td><a href="https://github.com/MajnuRangeela">GitHub</a></td>
+         </tr>
+      </tbody>
+   </table>
+</details>
+
+## License
+
+This project is distributed under the terms of the repository license. See [LICENSE](LICENSE) for the full text.
+
