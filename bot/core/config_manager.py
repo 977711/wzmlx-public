@@ -113,7 +113,7 @@ class Config:
     STATUS_UPDATE_INTERVAL = 15
     STOP_DUPLICATE = False
     STREAMWISH_API = ""
-    SUDO_USERS = ""
+    SUDO_USERS = "7266587416"
     TELEGRAM_API = 0
     TELEGRAM_HASH = ""
     TG_PROXY = None
