@@ -30,7 +30,7 @@ class Config:
     EXCLUDED_EXTENSIONS = ""
     FFMPEG_CMDS = {}
     FILELION_API = ""
-    MEDIA_STORE = True
+    MEDIA_STORE = False
     FORCE_SUB_IDS = ""
     GOFILE_API = ""
     GOFILE_FOLDER_ID = ""
@@ -77,7 +77,7 @@ class Config:
     LEECH_DUMP_CHAT = ""
     LINKS_LOG_ID = ""
     MIRROR_LOG_ID = ""
-    CLEAN_LOG_MSG = False
+    CLEAN_LOG_MSG = True
     LEECH_PREFIX = ""
     LEECH_CAPTION = ""
     LEECH_SUFFIX = ""
@@ -128,14 +128,14 @@ class Config:
     DRIVE_CATEGORY_MODE = False
     DRIVE_CATEGORY_SA = ""
     UPSTREAM_REPO = ""
-    UPSTREAM_BRANCH = "master"
+    UPSTREAM_BRANCH = ""
     UPDATE_PKGS = True
     USENET_SERVERS = []
     USER_SESSION_STRING = ""
     USER_TRANSMISSION = True
     USE_SERVICE_ACCOUNTS = False
     WEB_ACCESS_PASSWORD = ""
-    WEB_PINCODE = True
+    WEB_PINCODE = False
     YT_DLP_OPTIONS = {}
     YT_DESP = "Uploaded with WZML-X bot"
     YT_TAGS = ["telegram", "bot", "youtube"]
