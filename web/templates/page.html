@@ -226,8 +226,53 @@
             transition: background-color 0.2s;
         }
 
+        .file-tree-item.is-selected {
+            background-color: rgba(99, 102, 241, 0.1);
+        }
+
         .file-tree-item:hover {
             background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .position-badge {
+            font-size: 0.68rem;
+            color: rgba(255,255,255,0.3);
+            width: 24px;
+            text-align: right;
+            margin-right: 6px;
+            flex-shrink: 0;
+            font-family: monospace;
+        }
+
+        .range-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.4rem;
+            margin: 0.75rem 0;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid rgba(255,255,255,0.07);
+        }
+
+        .range-input {
+            width: 70px;
+            padding: 0 0.5rem;
+            height: 4vh;
+            border-radius: 4px;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.07);
+            color: inherit;
+            font-size: 0.82rem;
+            outline: none;
+        }
+
+        .range-input:focus { border-color: rgba(99,102,241,0.6); }
+        .range-input::placeholder { color: rgba(255,255,255,0.3); }
+
+        .range-hint {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.35);
+            flex-basis: 100%;
         }
 
         .file-tree-item .icon {
@@ -402,6 +447,13 @@
                 <button type="button" id="invertSelectionBtn" style="width: auto; padding: 0 1rem; height: 4vh; margin: 0;">Invert</button>
                 <button type="button" id="selectEverythingBtn" style="width: auto; padding: 0 1rem; height: 4vh; margin: 0;">Select Everything</button>
             </div>
+            <div class="range-bar">
+                <input type="number" id="rangeStartInput" min="1" placeholder="from #" class="range-input">
+                <span style="font-size:0.82rem;opacity:0.4">to</span>
+                <input type="number" id="rangeEndInput" min="1" placeholder="to #" class="range-input">
+                <button type="button" id="selectRangeBtn" style="width: auto; padding: 0 1rem; height: 4vh; margin: 0;">Select Range</button>
+                <span class="range-hint">file numbers across all folders · shift-click also works</span>
+            </div>
             <button type="button" id="submitBtn">Submit Selection</button>
         </div>
     </section>
@@ -418,6 +470,9 @@
         const fileTree = document.getElementById('fileTree');
         const selectAllBtn = document.getElementById('selectAllBtn');
         const submitBtn = document.getElementById('submitBtn');
+        const selectRangeBtn = document.getElementById('selectRangeBtn');
+        const rangeStartInput = document.getElementById('rangeStartInput');
+        const rangeEndInput = document.getElementById('rangeEndInput');
         const pinEntry = document.getElementById('pinEntry');
         const pinInput = document.getElementById('pinInput');
         const submitPin = document.getElementById('submitPin');
@@ -469,6 +524,10 @@
 
         function renderFileTree(nodes) {
             fileTree.innerHTML = '';
+
+            const globalFlat = flattenAllFiles(files);
+            const globalPosById = new Map(globalFlat.map((n, i) => [n.id, i + 1]));
+
             if (currentFolder) {
                 const backButton = document.createElement('div');
                 backButton.className = 'file-tree-item folder';
@@ -479,6 +538,11 @@
             nodes.forEach(node => {
                 const div = document.createElement('div');
                 div.className = 'file-tree-item';
+
+                const posBadge = document.createElement('span');
+                posBadge.className = 'position-badge';
+                posBadge.textContent = node.type === 'file' ? (globalPosById.get(node.id) ?? '') : '';
+
                 const checkboxWrapper = document.createElement('div');
                 checkboxWrapper.className = 'checkbox-wrapper';
 
@@ -486,7 +550,19 @@
                 checkbox.type = 'checkbox';
                 checkbox.id = node.id;
                 checkbox.checked = node.selected;
-                checkbox.addEventListener('change', () => toggleFile(node));
+                checkbox.addEventListener('click', (e) => {
+                    if (e.shiftKey && node.type === 'file') {
+                        e.preventDefault();
+                        handleShiftRangeSelect(node);
+                    }
+                });
+                checkbox.addEventListener('change', (e) => {
+                    if (!e.shiftKey) toggleFile(node);
+                    if (node.type === 'file') {
+                        const idx = globalFlat.findIndex(n => n.id === node.id);
+                        if (idx !== -1) lastClickedIndex = idx;
+                    }
+                });
 
                 checkboxWrapper.appendChild(checkbox);
 
@@ -529,6 +605,7 @@
                 fileInfo.appendChild(nameElement);
                 fileInfo.appendChild(sizeInfo);
 
+                div.appendChild(posBadge);
                 div.appendChild(checkboxWrapper);
                 div.appendChild(icon);
                 div.appendChild(fileInfo);
@@ -542,9 +619,12 @@
                     });
                     if (areAllChildrenSelected(node)) {
                         checkbox.checked = true;
+                        div.classList.add('is-selected');
                     } else if (areSomeChildrenSelected(node)) {
                         checkbox.indeterminate = true;
                     }
+                } else if (node.selected) {
+                    div.classList.add('is-selected');
                 }
 
                 fileTree.appendChild(div);
@@ -722,6 +802,65 @@
             updateSelectEverythingButtonText();
         }
 
+        // ── Range Selection ───────────────────────────────────────────────────
+        let lastClickedIndex = null;
+
+        function flattenAllFiles(nodes) {
+            const result = [];
+            function walk(list) {
+                for (const node of list) {
+                    if (node.type === 'file') result.push(node);
+                    else if (node.children) walk(node.children);
+                }
+            }
+            walk(nodes);
+            return result;
+        }
+
+        function selectRange(startPos, endPos) {
+            const flat = flattenAllFiles(files);
+            if (!flat.length) return;
+            const lo = Math.max(1, Math.min(startPos, endPos));
+            const hi = Math.min(flat.length, Math.max(startPos, endPos));
+            if (lo > flat.length) {
+                showRangeError(`Only ${flat.length} file${flat.length === 1 ? '' : 's'} in total.`);
+                return;
+            }
+            for (let i = lo - 1; i <= hi - 1; i++) flat[i].selected = true;
+            updateStats();
+            renderFileTree(currentFolder ? currentFolder.children : files);
+        }
+
+        function handleShiftRangeSelect(node) {
+            const flat = flattenAllFiles(files);
+            const clickedIndex = flat.findIndex(n => n.id === node.id);
+            if (lastClickedIndex !== null && clickedIndex !== -1) {
+                selectRange(lastClickedIndex + 1, clickedIndex + 1);
+            }
+            if (clickedIndex !== -1) lastClickedIndex = clickedIndex;
+        }
+
+        function handleSelectRangeClick() {
+            const start = parseInt(rangeStartInput.value, 10);
+            const end = parseInt(rangeEndInput.value, 10);
+            if (Number.isNaN(start) || Number.isNaN(end)) {
+                showRangeError('Please enter both a start and end number.');
+                return;
+            }
+            selectRange(start, end);
+        }
+
+        function showRangeError(msg) {
+            modalTitle.textContent = 'Invalid Range';
+            modalBody.innerHTML = `<p>${msg}</p>`;
+            modalFooter.innerHTML = '';
+            const ok = document.createElement('button');
+            ok.textContent = 'OK';
+            ok.onclick = closeModal;
+            modalFooter.appendChild(ok);
+            openModal();
+        }
+
         function getFullPath(node) {
             const path = [];
             let currentNode = findParent(files[0], node.id);
@@ -884,7 +1023,7 @@
 
         invertSelectionBtn.addEventListener('click', invertSelection);
         selectEverythingBtn.addEventListener('click', selectEverything);
-
+        selectRangeBtn.addEventListener('click', handleSelectRangeClick);
         selectAllBtn.addEventListener('click', selectAll);
         selectEverythingBtn.addEventListener('click', selectEverything);
         submitBtn.addEventListener('click', submitData);
