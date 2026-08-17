@@ -1,42 +1,104 @@
-asyncio
-aiofiles
-aiohttp
-aioshutil
-anytree
-apscheduler
-aioaria2
-aioqbt
-imdbinfo
-cloudscraper
-dnspython
-fastapi
-feedparser
-google-api-python-client
-google-auth-httplib2
-google-auth-oauthlib
-gunicorn
-httpx
-langcodes
-language-data
-jinja2
-lxml
-natsort
-par2cmdline-turbo
-pillow
-psutil
-pycountry
-pymongo
-pyrotgfork
-python-magic
-pytz
-qbittorrent-api
-requests
-speedtest-cli
-telegraph
-tenacity
-tgcrypto
-urllib3
-uvicorn
-uvloop
-xattr
-yt-dlp[default,curl-cffi]
+remote:  + aioaria2==1.3.6
+remote:  + aiofiles==25.1.0
+remote:  + aiohappyeyeballs==2.7.1
+remote:  + aiohttp==3.14.3
+remote:  + aioqbt==1.1.0
+remote:  + aioshutil==1.6
+remote:  + aiosignal==1.4.0
+remote:  + annotated-doc==0.0.5
+remote:  + annotated-types==0.8.0
+remote:  + anyio==4.14.2
+remote:  + anytree==2.13.0
+remote:  + apscheduler==3.11.3
+remote:  + asyncio==4.0.0
+remote:  + attrs==26.1.0
+remote:  + brotli==1.2.0
+remote:  + certifi==2026.7.22
+remote:  + cffi==2.1.1
+remote:  + charset-normalizer==3.5.1
+remote:  + click==8.4.2
+remote:  + cloudscraper==1.2.71
+remote:  + cryptography==50.0.0
+remote:  + curl-cffi==0.15.0
+remote:  + deprecated==1.3.1
+remote:  + dnspython==2.8.0
+remote:  + fastapi==0.141.1
+remote:  + feedparser==6.0.14
+remote:  + feedparser-sgmllib==2.1.0
+remote:  + frozenlist==1.8.0
+remote:  + google-api-core==2.34.0
+remote:  + google-api-python-client==2.198.0
+remote:  + google-auth==2.56.3
+remote:  + google-auth-httplib2==0.4.1
+remote:  + google-auth-oauthlib==1.4.0
+remote:  + googleapis-common-protos==1.75.1
+remote:  + gunicorn==26.0.0
+remote:  + h11==0.16.0
+remote:  + httpcore==1.0.9
+remote:  + httplib2==0.32.0
+remote:  + httpx==0.28.1
+remote:  + idna==3.18
+remote:  + imdbinfo==0.9.9
+remote:  + imdbinfo-aws==1.0.4
+remote:  + jh2==5.0.13
+remote:  + jinja2==3.1.6
+remote:  + jmespath==1.1.0
+remote:  + langcodes==3.5.1
+remote:  + language-data==1.4.0
+remote:  + lxml==6.1.1
+remote:  + marisa-trie==1.4.1
+remote:  + markdown-it-py==4.2.0
+remote:  + markupsafe==3.0.3
+remote:  + mdurl==0.1.2
+remote:  + multidict==6.7.1
+remote:  + mutagen==1.48.1
+remote:  + natsort==8.4.0
+remote:  + niquests==3.21.0
+remote:  + oauthlib==3.3.1
+remote:  + par2cmdline-turbo==1.4.0
+remote:  + pillow==12.3.0
+remote:  + propcache==0.5.2
+remote:  + proto-plus==1.28.3
+remote:  + protobuf==7.35.1
+remote:  + psutil==7.2.2
+remote:  + pyaes==1.6.1
+remote:  + pyasn1==0.6.4
+remote:  + pyasn1-modules==0.4.2
+remote:  + pycountry==26.2.16
+remote:  + pycparser==3.0
+remote:  + pycryptodomex==3.23.0
+remote:  + pydantic==2.13.4
+remote:  + pydantic-core==2.46.4
+remote:  + pygments==2.20.0
+remote:  + pymongo==4.17.0
+remote:  + pyparsing==3.3.2
+remote:  + pyrotgfork==2.2.24
+remote:  + pysocks==1.7.1
+remote:  + pytgcrypto==1.2.12
+remote:  + python-magic==0.4.27
+remote:  + pytz==2026.3.post1
+remote:  + qbittorrent-api==2026.8.1
+remote:  + qh3==1.9.4
+remote:  + requests==2.34.2
+remote:  + requests-oauthlib==2.0.0
+remote:  + requests-toolbelt==1.0.0
+remote:  + rich==15.0.0
+remote:  + speedtest-cli==2.1.3
+remote:  + starlette==1.6.0
+remote:  + telegraph==2.2.0
+remote:  + tenacity==9.1.4
+remote:  + typing-extensions==4.16.0
+remote:  + typing-inspection==0.4.4
+remote:  + tzlocal==5.4.4
+remote:  + uritemplate==4.2.0
+remote:  + urllib3==2.7.0
+remote:  + urllib3-future==2.24.901
+remote:  + uvicorn==0.52.3
+remote:  + uvloop==0.22.1
+remote:  + wassima==2.1.3
+remote:  + websockets==17.0.1
+remote:  + wrapt==2.3.0
+remote:  + xattr==1.3.0
+remote:  + yarl==1.24.5
+remote:  + yt-dlp==2026.7.4
+remote:  + yt-dlp-ejs==0.8.0
