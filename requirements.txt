@@ -6,7 +6,9 @@ anytree
 apscheduler
 aioaria2
 aioqbt
+beautifulsoup4
 imdbinfo
+curl_cffi
 cloudscraper
 dnspython
 fastapi
