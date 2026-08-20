@@ -497,6 +497,13 @@
         let currentFolder = null;
         let files = [];
         let allowEdit = false;
+        let currentEngine = '';  // set after PIN submit; 'mega' triggers /app/files/mega
+
+        function _apiEndpoint() {
+            return currentEngine === 'mega'
+                ? `/app/files/mega?gid=${urlParams.gid}&pin=${pinInput.value}`
+                : `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}`;
+        }
 
         function formatSize(size) {
             const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -885,7 +892,6 @@
                 const newName = editNameInput.value.trim();
                 if (newName && newName !== node.name) {
                     const fullPath = getFullPath(node);
-                    // Rename is only supported for qBittorrent; MEGA doesn't support it.
                     const requestUrl = `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}&mode=rename`;
                     const body = {
                         old_path: fullPath ? `${fullPath}/${node.name}` : node.name,
@@ -944,7 +950,9 @@
             modalBody.innerHTML = `<p>Submitting, ${checkedFilesEl.innerText} file(s)... </p>`;
             modalFooter.innerHTML = '';
             openModal();
-            const requestUrl = `${apiEndpoint()}?gid=${urlParams.gid}&pin=${pinInput.value}&mode=selection`;
+            const requestUrl = currentEngine === 'mega'
+                ? `/app/files/mega?gid=${urlParams.gid}&pin=${pinInput.value}`
+                : `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}&mode=selection`;
             fetch(requestUrl, { 'method': 'POST', 'body': JSON.stringify(files) }).then(response => {
                 if (reusableModal.style.display === 'block') {
                     closeModal();
@@ -960,16 +968,6 @@
                 openModal();
             });
         }
-
-        // ── Endpoint router ───────────────────────────────────────────────────
-        // Returns the correct backend path for this GID.
-        // mega_<gid>  →  /app/files/mega
-        // everything else  →  /app/files/torrent  (aria2, qbit, sabnzbd)
-        function apiEndpoint() {
-            const gid = urlParams.gid || '';
-            return gid.startsWith('mega_') ? '/app/files/mega' : '/app/files/torrent';
-        }
-        // ─────────────────────────────────────────────────────────────────────
 
         pinInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
@@ -992,8 +990,13 @@
                 openModal();
                 return false;
             }
-            const requestUrl = `${apiEndpoint()}?gid=${urlParams.gid}&pin=${pinInput.value}&mode=get`;
-            fetch(requestUrl).then(function (response) {
+            // Detect engine from URL param (set by bot when sending the link)
+            // Fallback: try /mega first if engine=mega param present, else use torrent endpoint
+            const engineParam = urlParams.engine || '';
+            const fetchEndpoint = engineParam === 'mega'
+                ? `/app/files/mega?gid=${urlParams.gid}&pin=${pinInput.value}`
+                : `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}&mode=get`;
+            fetch(fetchEndpoint).then(function (response) {
                 if (response.ok) {
                     return response.json().then(data => {
                         if (data.error) {
@@ -1003,7 +1006,7 @@
                             openModal();
                         } else {
                             files = data.files;
-                            // Rename only works for qBittorrent; never for MEGA or aria2.
+                            currentEngine = data.engine || engineParam;
                             allowEdit = data.engine === "qbittorrent";
                             pinEntry.classList.add('fadeOut');
                             setTimeout(() => {
