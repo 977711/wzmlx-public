@@ -29,18 +29,10 @@ from fastapi.templating import Jinja2Templates
 from sabnzbdapi import SabnzbdClient
 from aioqbt.exc import AQError
 
-from web.nodes import extract_file_ids, make_tree, make_mega_tree
+from web.nodes import extract_file_ids, make_tree
 from aiohttp import ClientSession
 
-# --- MEGA selection store (shared with the bot process via disk) ---
-from web.mega_selection_store import (
-    get_file_list as mega_get_file_list,
-    get_selected_ids as mega_get_selected_ids,
-    update_selected_ids as mega_update_selected_ids,
-    delete_state as mega_delete_state,
-)
-
-getLogger("httpx").setLevel(WARNING)
+getLogger("niquests").setLevel(WARNING)
 getLogger("aiohttp").setLevel(WARNING)
 getLogger("uvicorn").setLevel(WARNING)
 getLogger("uvicorn.access").setLevel(WARNING)
@@ -66,13 +58,51 @@ _pin_attempts: dict = {}
 
 _cached_secret_bytes = None
 
+# ── Mega session store ────────────────────────────────────────────────────────
+# Keyed by mgid (token_hex(5) set by add_mega_download).
+# Each entry: {
+#   "files":   <list – the JSON tree from make_mega_tree>,
+#   "event":   <asyncio.Event – set when user submits selection>,
+#   "selected":<list[str] of chosen handle strings, or None>,
+# }
+_MEGA_SESSIONS: dict = {}
+
+
+def mega_session_create(mgid: str, files_json: list):
+    """Called from add_mega_download to register a pending selection."""
+    from asyncio import Event
+    _MEGA_SESSIONS[mgid] = {
+        "files": files_json,
+        "event": Event(),
+        "selected": None,
+    }
+
+
+def mega_session_get(mgid: str):
+    return _MEGA_SESSIONS.get(mgid)
+
+
+def mega_session_submit(mgid: str, selected: list):
+    """Called from the POST handler; unblocks add_mega_download."""
+    session = _MEGA_SESSIONS.get(mgid)
+    if session:
+        session["selected"] = selected
+        bot_loop.call_soon_threadsafe(session["event"].set)
+
+
+def mega_session_pop(mgid: str):
+    return _MEGA_SESSIONS.pop(mgid, None)
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 def _load_config():
     try:
         cfg = import_module("config")
     except ModuleNotFoundError:
         cfg = None
-    bot_token = environ.get("BOT_TOKEN", "") or (getattr(cfg, "BOT_TOKEN", "") if cfg else "")
+    bot_token = environ.get("BOT_TOKEN", "") or (
+        getattr(cfg, "BOT_TOKEN", "") if cfg else ""
+    )
     access_pwd = environ.get("WEB_ACCESS_PASSWORD", "") or (
         getattr(cfg, "WEB_ACCESS_PASSWORD", "") if cfg else ""
     )
@@ -96,6 +126,7 @@ def _service_pwd(service):
     from hashlib import sha256
     from hmac import new as hmac_new
     from secrets import token_bytes
+
     global _cached_secret_bytes
     if not _ACCESS_PASSWORD:
         if _cached_secret_bytes is None:
@@ -115,6 +146,7 @@ def _service_pwd(service):
 def _derive_pin(gid):
     from hashlib import sha256
     from hmac import new as hmac_new
+
     sig = hmac_new(
         _PIN_SALT,
         f"{gid}|{_BOT_ID}".encode("utf-8"),
@@ -128,6 +160,7 @@ def _derive_pin(gid):
 
 def _pin_rate_limited(gid):
     from time import time
+
     now = time()
     cutoff = now - _PIN_RATE_WINDOW
     attempts = _pin_attempts.get(gid, [])
@@ -138,9 +171,7 @@ def _pin_rate_limited(gid):
         _pin_attempts.pop(gid, None)
     if len(_pin_attempts) > 10000:
         stale = [
-            g
-            for g, ts in _pin_attempts.items()
-            if not ts or (ts and ts[-1] < cutoff)
+            g for g, ts in _pin_attempts.items() if not ts or (ts and ts[-1] < cutoff)
         ]
         for g in stale:
             _pin_attempts.pop(g, None)
@@ -149,12 +180,14 @@ def _pin_rate_limited(gid):
 
 def _record_pin_attempt(gid):
     from time import time
+
     _pin_attempts.setdefault(gid, []).append(time())
 
 
 def _verify_pin(gid, pin):
     from hashlib import sha256
     from hmac import new as hmac_new
+
     if not gid or not pin:
         return False
     if not _SAFE_PIN.match(pin):
@@ -162,9 +195,10 @@ def _verify_pin(gid, pin):
     expected = _derive_pin(gid)
     if not expected:
         return False
-    return hmac_new(_PIN_SALT, expected.encode(), sha256).hexdigest() == hmac_new(
-        _PIN_SALT, pin.encode(), sha256
-    ).hexdigest()
+    return (
+        hmac_new(_PIN_SALT, expected.encode(), sha256).hexdigest()
+        == hmac_new(_PIN_SALT, pin.encode(), sha256).hexdigest()
+    )
 
 
 aria2 = None
@@ -255,16 +289,6 @@ async def handle_torrent(request: Request):
                 "engine": "",
                 "error": "GID is missing",
                 "message": "GID not specified",
-            }
-        )
-
-    if not _SAFE_GID.match(gid):
-        return JSONResponse(
-            {
-                "files": [],
-                "engine": "",
-                "error": "Invalid GID",
-                "message": "Invalid GID",
             }
         )
 
@@ -367,115 +391,93 @@ async def handle_torrent(request: Request):
     return JSONResponse(content)
 
 
-# ---------------------------------------------------------------------------
-# MEGA file-selection endpoint
-# ---------------------------------------------------------------------------
-# GET  /app/files/mega?gid=<gid>&pin=<pin>
-#   → returns { files: [...], engine: "mega", error: "", message: "" }
-#
-# POST /app/files/mega?gid=<gid>&pin=<pin>
-#   body: same nested file-list that page.html POSTs for torrents
-#   → persists the selected_ids back to the on-disk state and returns
-#     { files: [], engine: "mega", error: "", message: "..." }
-#
-# The bot's mega_download.py reads the same state file to know which node
-# handles to actually download once the user clicks "Done".
-# ---------------------------------------------------------------------------
+# ── Mega file-selection endpoint ──────────────────────────────────────────────
 
 @app.api_route(
-    "/app/files/mega", methods=["GET", "POST"], response_class=JSONResponse
+    "/app/files/mega", methods=["GET", "POST"], response_class=HTMLResponse
 )
 async def handle_mega(request: Request):
     params = request.query_params
 
-    if not (gid := params.get("gid")):
+    if not (mgid := params.get("gid")):
         return JSONResponse(
-            {"files": [], "engine": "mega", "error": "GID is missing", "message": "GID not specified"}
-        )
-
-    if not _SAFE_GID.match(gid):
-        return JSONResponse(
-            {"files": [], "engine": "mega", "error": "Invalid GID", "message": "Invalid GID"}
+            {
+                "files": [],
+                "engine": "",
+                "error": "GID is missing",
+                "message": "Mega GID not specified",
+            }
         )
 
     if not (pin := params.get("pin")):
         return JSONResponse(
-            {"files": [], "engine": "mega", "error": "Pin is missing", "message": "PIN not specified"}
+            {
+                "files": [],
+                "engine": "",
+                "error": "Pin is missing",
+                "message": "PIN not specified",
+            }
         )
 
-    if _pin_rate_limited(gid):
+    if _pin_rate_limited(mgid):
         return JSONResponse(
             {
-                "files": [], "engine": "mega",
+                "files": [],
+                "engine": "",
                 "error": "Too many attempts",
                 "message": f"Too many PIN attempts. Try again in {_PIN_RATE_WINDOW}s.",
             },
             status_code=429,
         )
 
-    if not _verify_pin(gid, pin):
-        _record_pin_attempt(gid)
+    if not _verify_pin(mgid, pin):
+        _record_pin_attempt(mgid)
         return JSONResponse(
-            {"files": [], "engine": "mega", "error": "Invalid pin", "message": "The PIN you entered is incorrect. Try Again!"}
+            {
+                "files": [],
+                "engine": "",
+                "error": "Invalid pin",
+                "message": "The PIN you entered is incorrect. Try Again!",
+            }
         )
-    _pin_attempts.pop(gid, None)
+    _pin_attempts.pop(mgid, None)
 
-    # ---- GET: return the file tree built from the stored file_list ----
-    if request.method == "GET":
-        file_list = mega_get_file_list(gid)
-        if file_list is None:
-            return JSONResponse(
-                {"files": [], "engine": "mega", "error": "Task not found", "message": "MEGA selection session not found or already completed."}
-            )
-        # Re-apply any previously stored selections so the UI shows the right
-        # checkboxes when the user reopens the page.
-        selected_ids = set(str(x) for x in mega_get_selected_ids(gid))
-        if selected_ids:
-            _apply_mega_selections(file_list, selected_ids)
+    session = mega_session_get(mgid)
+    if not session:
+        return JSONResponse(
+            {
+                "files": [],
+                "engine": "",
+                "error": "Session expired",
+                "message": "This Mega selection session has expired or was already submitted.",
+            }
+        )
 
-        content = make_mega_tree(file_list)
-        return JSONResponse(content)
-
-    # ---- POST: persist the user's checkbox choices ----
-    try:
+    if request.method == "POST":
         data = await request.json()
-    except Exception:
+        selected_files, _ = extract_file_ids(data)
+        mega_session_submit(mgid, selected_files)
+        LOGGER.info(f"Mega selection submitted for mgid={mgid}: {len(selected_files)} file(s)")
         return JSONResponse(
-            {"files": [], "engine": "mega", "error": "Bad request body", "message": "Could not parse JSON body."},
-            status_code=400,
+            {
+                "files": [],
+                "engine": "mega",
+                "error": "",
+                "message": "Your selection has been submitted successfully.",
+            }
+        )
+    else:
+        # GET — return the stored tree
+        return JSONResponse(
+            {
+                "files": session["files"],
+                "engine": "mega",
+                "error": "",
+                "message": "",
+            }
         )
 
-    selected_files, _ = extract_file_ids(data)
-    # selected_files are the file_id values the user ticked
-    ok = mega_update_selected_ids(gid, selected_files)
-    if not ok:
-        return JSONResponse(
-            {"files": [], "engine": "mega", "error": "Save failed", "message": "Could not save selection – session may have expired."},
-            status_code=500,
-        )
-
-    return JSONResponse(
-        {"files": [], "engine": "mega", "error": "", "message": "Your MEGA file selection has been saved. Press Done in Telegram to start downloading."}
-    )
-
-
-def _apply_mega_selections(file_list: list, selected_ids: set) -> None:
-    """
-    Walk the nested file-list returned by mega_get_file_list and flip the
-    ``selected`` flag to match what the user previously chose.  Works in-place.
-    """
-    for item in file_list:
-        if item.get("is_dir"):
-            _apply_mega_selections(item.get("children", []), selected_ids)
-        else:
-            fid = str(item.get("id", ""))
-            if fid:
-                item["selected"] = fid in selected_ids
-
-
-# ---------------------------------------------------------------------------
-# End of MEGA endpoint
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 async def handle_rename(gid, data):
@@ -553,14 +555,24 @@ async def proxy_fetch(
             data=body,
             allow_redirects=False,
         ) as upstream:
-            raw = [(k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in upstream.headers.items()
-                    if k.lower() not in ("content-length", "content-encoding")]
+            raw = [
+                (k.lower().encode("latin-1"), v.encode("latin-1"))
+                for k, v in upstream.headers.items()
+                if k.lower() not in ("content-length", "content-encoding")
+            ]
             if upstream.status in (301, 302, 303, 307, 308):
                 loc = upstream.headers.get("Location")
                 if loc:
                     new_loc = rewrite_location(loc, proxy_prefix)
-                    raw = [(k, new_loc.encode("latin-1") if k == b"location" else v) for k, v in raw]
-            body = await upstream.read() if upstream.status not in (301, 302, 303, 307, 308) else b""
+                    raw = [
+                        (k, new_loc.encode("latin-1") if k == b"location" else v)
+                        for k, v in raw
+                    ]
+            body = (
+                await upstream.read()
+                if upstream.status not in (301, 302, 303, 307, 308)
+                else b""
+            )
             response = Response(content=body, status_code=upstream.status)
             response.raw_headers = raw
             return response
