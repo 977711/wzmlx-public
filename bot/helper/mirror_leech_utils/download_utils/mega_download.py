@@ -21,7 +21,6 @@ from ...listeners.mega_listener import (
     MegaAppListener,
     MegaFolderListener,
     _mega_error_format,
-    _MEGA_SDK_LOCK,
 )
 from ...mirror_leech_utils.status_utils.mega_status import MegaDownloadStatus
 from ...mirror_leech_utils.status_utils.queue_status import QueueStatus
@@ -143,7 +142,7 @@ async def add_mega_download(listener, path):
 
         if is_folder:
             async_api.folder_api = folder_api = MegaApi("", mega_dir, "WZML-X", 4)
-            
+
             # 1. Attach the listener FIRST
             folder_listener = MegaFolderListener(async_api, listener)
             async_api._folder_listener = folder_listener
@@ -406,22 +405,21 @@ async def add_mega_download(listener, path):
     finally:
         if async_api is not None:
             if not is_folder:
-                async with _MEGA_SDK_LOCK:
+                with suppress(Exception):
+                    await async_api.logout()
+                if (
+                    async_api.api is not None
+                    and async_api._mega_listener is not None
+                ):
                     with suppress(Exception):
-                        await async_api.logout()
-                    if (
-                        async_api.api is not None
-                        and async_api._mega_listener is not None
-                    ):
-                        with suppress(Exception):
-                            async_api.api.removeListener(async_api._mega_listener)
-                    if (
-                        async_api.folder_api is not None
-                        and async_api._folder_listener is not None
-                    ):
-                        with suppress(Exception):
-                            async_api.folder_api.removeListener(
-                                async_api._folder_listener
-                            )
+                        async_api.api.removeListener(async_api._mega_listener)
+                if (
+                    async_api.folder_api is not None
+                    and async_api._folder_listener is not None
+                ):
+                    with suppress(Exception):
+                        async_api.folder_api.removeListener(
+                            async_api._folder_listener
+                        )
         await _release_link(listener.link)
         await clean_download(mega_base)
