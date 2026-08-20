@@ -189,6 +189,7 @@ async def add_mega_download(listener, path):
             if dl_listener.error:
                 await listener.on_download_error(_mega_error_format(dl_listener.error))
                 return
+            LOGGER.info("Mega: dl_listener.node=%s, dl_listener.error=%s", dl_listener.node, dl_listener.error)
             if not dl_listener.node:
                 await listener.on_download_error("Failed to get root node for MEGA folder")
                 return
@@ -213,6 +214,12 @@ async def add_mega_download(listener, path):
                 raw_items = await sync_to_async(
                     mega_node_children_to_list, node, folder_api
                 )
+                LOGGER.info("Mega: raw_items count=%d for file selection", len(raw_items) if raw_items else 0)
+                if not raw_items:
+                    await listener.on_download_error(
+                        "Mega folder appears empty or could not be listed. Cannot show file selector."
+                    )
+                    return
                 if raw_items:
                     tree_data = make_mega_tree(raw_items)
 
