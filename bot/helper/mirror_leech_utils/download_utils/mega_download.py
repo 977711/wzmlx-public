@@ -1,5 +1,5 @@
 import os
-from asyncio import Lock as AsyncLock, sleep as asleep
+from asyncio import Lock as AsyncLock, sleep as asleep, get_event_loop, Event as AsyncEvent
 from contextlib import suppress
 from secrets import token_hex
 
@@ -31,6 +31,10 @@ except Exception as _import_err:
 
 _ACTIVE_MEGA_LINKS = set()
 _ACTIVE_MEGA_LINKS_LOCK = AsyncLock()
+
+# Per-gid events: set when the user submits selection via web UI
+_MEGA_SELECTION_EVENTS: dict = {}
+_MEGA_SELECTION_EVENTS_LOCK = AsyncLock()
 
 
 def _find_child_by_handle(api, parent_node, target_handle):
@@ -101,7 +105,6 @@ def _collect_mega_files(api, node, prefix=""):
             try:
                 child_name = child.getName() or f"unknown_{i}"
                 rel_path = f"{prefix}/{child_name}".lstrip("/")
-                # MegaNode.TYPE_FOLDER == 1, TYPE_FILE == 0
                 if child.getType() == 1:
                     file_list.extend(_collect_mega_files(api, child, rel_path))
                 else:
@@ -123,23 +126,39 @@ def _collect_mega_files(api, node, prefix=""):
     return file_list
 
 
+async def _poll_for_selection(gid: str, event: AsyncEvent, timeout: int = 300):
+    """
+    Runs as a background task. Polls mega_get_selection every second.
+    Sets the event when a result arrives or timeout is reached.
+    Stores result in _MEGA_SELECTION_EVENTS[gid] as the actual dict or None.
+    """
+    for _ in range(timeout):
+        await asleep(1)
+        result = mega_get_selection(gid)
+        if result is not None:
+            async with _MEGA_SELECTION_EVENTS_LOCK:
+                _MEGA_SELECTION_EVENTS[gid] = result
+            event.set()
+            return
+    # Timed out
+    async with _MEGA_SELECTION_EVENTS_LOCK:
+        _MEGA_SELECTION_EVENTS[gid] = None
+    event.set()
+
+
 async def _maybe_await_mega_selection(listener, node, correct_api, gid):
     """
     If the resolved MEGA node has more than 1 file, register the file list with
     the web server, send the user a selection URL, and wait up to 5 minutes.
+    The wait runs as a background task so the bot loop stays free.
 
-    Returns (selected_handles, unselected_handles) if the user submitted a
-    selection, or (None, None) to mean "download everything".
+    Returns (selected_handles, unselected_handles) or (None, None) for "download everything".
     """
-    # Debug log so we can see exactly what values are present
-    base_url = getattr(Config, "BASE_URL", None) or getattr(Config, "base_url", None)
+    base_url = getattr(Config, "BASE_URL", None)
     LOGGER.info(f"Mega selection check: available={_MEGA_SELECTION_AVAILABLE}, BASE_URL={base_url!r}")
 
-    if not _MEGA_SELECTION_AVAILABLE:
-        return None, None
-
-    if not base_url:
-        LOGGER.warning("Mega: BASE_URL not set — skipping file selection UI")
+    if not _MEGA_SELECTION_AVAILABLE or not base_url:
+        LOGGER.warning("Mega: skipping file selection (not available or BASE_URL missing)")
         return None, None
 
     file_list = await sync_to_async(_collect_mega_files, correct_api, node)
@@ -153,17 +172,17 @@ async def _maybe_await_mega_selection(listener, node, correct_api, gid):
     pin = _derive_pin(gid)
     sel_url = f"{base_url.rstrip('/')}/app/files?gid={gid}&pin={pin}"
 
-    LOGGER.info(f"Mega: sending selection URL to user: {sel_url}")
+    LOGGER.info(f"Mega: sending selection URL: {sel_url}")
 
     try:
         await send_message(
             listener.message,
             f"<b>📂 MEGA File Selection</b>\n\n"
             f"<b>{len(file_list)} files</b> found in this folder.\n"
-            f"Choose which ones to download:\n\n"
-            f"<a href='{sel_url}'>🔗 Open File Selector</a>\n\n"
-            f"<i>Waiting up to 5 minutes. "
-            f"If you don't select, all files will be downloaded.</i>",
+            f"Open the selector, pick your files, and click <b>Submit Selection</b>.\n\n"
+            f"🔗 <a href='{sel_url}'>Open File Selector</a>\n\n"
+            f"<i>⏳ Waiting up to 5 minutes. "
+            f"If you don't submit, all files will be downloaded.</i>",
         )
         LOGGER.info("Mega: selection message sent successfully")
     except Exception as e:
@@ -171,26 +190,40 @@ async def _maybe_await_mega_selection(listener, node, correct_api, gid):
         mega_cleanup(gid)
         return None, None
 
+    # Start background polling task — does NOT block the bot loop
+    done_event = AsyncEvent()
+    async with _MEGA_SELECTION_EVENTS_LOCK:
+        _MEGA_SELECTION_EVENTS[gid] = None
+
+    loop = get_event_loop()
+    poll_task = loop.create_task(_poll_for_selection(gid, done_event, timeout=300))
+
     LOGGER.info(f"Mega: waiting for file selection, gid={gid}, files={len(file_list)}")
 
-    for _ in range(300):
-        await asleep(1)
+    # Wait for either the user to submit or cancellation — yields control to the event loop
+    while not done_event.is_set():
         if listener.is_cancelled:
+            poll_task.cancel()
             mega_cleanup(gid)
+            async with _MEGA_SELECTION_EVENTS_LOCK:
+                _MEGA_SELECTION_EVENTS.pop(gid, None)
             return None, None
-        result = mega_get_selection(gid)
-        if result is not None:
-            mega_cleanup(gid)
-            LOGGER.info(
-                f"Mega: selection received — selected={len(result['selected'])}, "
-                f"unselected={len(result['unselected'])}"
-            )
-            return result["selected"], result["unselected"]
+        await asleep(2)
 
-    # Timed out — proceed with everything
+    async with _MEGA_SELECTION_EVENTS_LOCK:
+        result = _MEGA_SELECTION_EVENTS.pop(gid, None)
+
     mega_cleanup(gid)
-    LOGGER.info(f"Mega: selection timed out for gid={gid}, downloading all files")
-    return None, None
+
+    if result is None:
+        LOGGER.info(f"Mega: selection timed out for gid={gid}, downloading all files")
+        return None, None
+
+    LOGGER.info(
+        f"Mega: selection received — selected={len(result['selected'])}, "
+        f"unselected={len(result['unselected'])}"
+    )
+    return result["selected"], result["unselected"]
 
 
 async def add_mega_download(listener, path):
@@ -209,6 +242,7 @@ async def add_mega_download(listener, path):
     async_api = None
     mega_base = ""
     is_folder = is_mega_folder_link(listener.link)
+    folder_api = None
     try:
         sdk_gid = token_hex(5)
         await makedirs(path, exist_ok=True)
@@ -285,7 +319,6 @@ async def add_mega_download(listener, path):
             else:
                 node = dl_listener.node
         else:
-            folder_api = None
             dl_listener = mega_listener
             if mega_email and mega_password:
                 await async_api.login(mega_email, mega_password)
