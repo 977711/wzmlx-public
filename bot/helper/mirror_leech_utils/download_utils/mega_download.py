@@ -22,7 +22,7 @@ from ...mirror_leech_utils.status_utils.mega_status import MegaDownloadStatus
 from ...mirror_leech_utils.status_utils.queue_status import QueueStatus
 
 # web/nodes helpers for file-selection
-from web.nodes import mega_node_children_to_list, make_mega_tree
+from web.nodes import mega_node_children_to_list
 
 
 _ACTIVE_MEGA_LINKS = set()
@@ -221,12 +221,13 @@ async def add_mega_download(listener, path):
                     )
                     return
                 if raw_items:
-                    tree_data = make_mega_tree(raw_items)
-
-                    # Register session in wserver
+                    # raw_items from mega_node_children_to_list is already in the exact
+                    # dict shape the frontend expects — skip the TorNode round-trip in
+                    # make_mega_tree which was producing an empty list due to anytree
+                    # NodeMixin children not attaching correctly.
                     from web.wserver import mega_session_create, mega_session_get, mega_session_pop, _derive_pin
                     mgid = token_hex(5)
-                    mega_session_create(mgid, tree_data["files"])
+                    mega_session_create(mgid, raw_items)
                     pin = _derive_pin(mgid)
 
                     # Send the selection URL to the user via Telegram
