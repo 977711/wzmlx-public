@@ -195,6 +195,81 @@ def create_list(parent, contents=None):
     return contents
 
 
+def make_mega_tree(file_list):
+    """
+    Build a file-tree from a flat MEGA file list.
+
+    Each entry in file_list must be a dict:
+        {
+            "name":     str,           # full relative path, e.g. "folderA/sub/file.mkv"
+            "size":     int,           # bytes
+            "handle":   str,           # MEGA node handle (used as unique file id)
+            "selected": bool,          # True = included in download
+        }
+
+    Returns the same {"files": [...], "engine": "mega"} shape that make_tree() produces
+    so the existing page.html / wserver logic works without changes.
+    """
+    parent = TorNode("MEGA")
+    folder_id = 0
+
+    for item in file_list:
+        parts = [p for p in item["name"].replace("\\", "/").split("/") if p]
+        if not parts:
+            continue
+
+        previous_node = parent
+        # create / navigate folder nodes for every component except the last
+        for folder_name in parts[:-1]:
+            existing = next(
+                (c for c in previous_node.children if c.name == folder_name and c.is_folder),
+                None,
+            )
+            if existing is None:
+                previous_node = TorNode(
+                    folder_name,
+                    is_folder=True,
+                    parent=previous_node,
+                    file_id=f"mega_folder_{folder_id}",
+                )
+                folder_id += 1
+            else:
+                previous_node = existing
+
+        # leaf file node
+        TorNode(
+            parts[-1],
+            is_file=True,
+            parent=previous_node,
+            size=item.get("size", 0),
+            priority=1 if item.get("selected", True) else 0,
+            file_id=item["handle"],
+            progress=item.get("progress", 0),
+        )
+
+    result = create_list(parent)
+    return {"files": result, "engine": "mega"}
+
+
+def extract_mega_handles(data):
+    """
+    Walk the file-tree returned by make_mega_tree / create_list and split node
+    handles into selected and unselected lists.
+
+    Returns (selected_handles: list[str], unselected_handles: list[str])
+    """
+    selected = []
+    unselected = []
+    for item in data:
+        if item.get("type") == "file":
+            (selected if item.get("selected") else unselected).append(str(item["id"]))
+        if item.get("children"):
+            s, u = extract_mega_handles(item["children"])
+            selected.extend(s)
+            unselected.extend(u)
+    return selected, unselected
+
+
 def extract_file_ids(data):
     selected_files = []
     unselected_files = []
