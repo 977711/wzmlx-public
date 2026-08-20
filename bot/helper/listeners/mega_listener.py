@@ -954,20 +954,57 @@ class MegaFolderListener(MegaListener):
             if request_type == MegaRequest.TYPE_LOGIN:
                 pass
             elif request_type == MegaRequest.TYPE_FETCH_NODES:
-                root_node = api.getRootNode()
+                # For loginToFolder sessions, getRootNode() returns None because
+                # the SDK virtual filesystem root is accessed via the folder handle.
+                # We try a chain of fallbacks to reliably get the root node.
+                root_node = None
+                try:
+                    root_node = api.getRootNode()
+                except Exception:
+                    pass
                 if not root_node:
                     try:
                         root_node = api.getNodeByPath("/", None)
                     except Exception:
                         pass
+                if not root_node:
+                    # Folder-link sessions: the root is the node whose handle
+                    # the SDK stored when loginToFolder completed. Walk all
+                    # top-level nodes to find it.
+                    try:
+                        all_nodes = api.getChildren(api.getRootNode()) if api.getRootNode() else None
+                    except Exception:
+                        all_nodes = None
+                    if not all_nodes or all_nodes.size() == 0:
+                        # Last resort: use getNodeByHandle with the request nodeHandle
+                        try:
+                            h = request.getNodeHandle()
+                            if h:
+                                root_node = api.getNodeByHandle(h)
+                        except Exception:
+                            pass
+                if not root_node:
+                    # Absolute last resort: scan for any top-level folder node
+                    try:
+                        for search_path in ["/", "//"]:
+                            candidate = api.getNodeByPath(search_path, None)
+                            if candidate:
+                                root_node = candidate
+                                break
+                    except Exception:
+                        pass
                 self.node = root_node
                 if self.node:
+                    LOGGER.info("MegaFolder: fetchNodes root_node resolved: name=%s handle=%s",
+                                self.node.getName(), self.node.getHandle())
                     self._cache_node_data(self.node)
                     self._size = api.getSize(self.node)
                     try:
                         self._children = api.getChildren(self.node)
                     except Exception:
                         pass
+                else:
+                    LOGGER.error("MegaFolder: fetchNodes completed but root_node is None — all resolution strategies failed")
 
             if self._is_expected_request(request_type) and self._is_expected_source(source):
                 self._set_request_event()
