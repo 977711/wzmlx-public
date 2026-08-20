@@ -1,3 +1,6 @@
+# This file is a part of NEO-WZML (github.com/irisXDR/NEO-WZML)
+# nodes.py — used by both the bot process and wserver (web/nodes.py symlink)
+
 from anytree import NodeMixin
 
 
@@ -138,6 +141,7 @@ def make_tree(res, tool, root_path=""):
                     progress=progress,
                 )
     else:
+        # sabnzbd
         parent = TorNode("SABNZBD+")
         priority = 1
         for i in res["files"]:
@@ -158,13 +162,138 @@ def make_tree(res, tool, root_path=""):
     return {"files": result, "engine": tool}
 
 
-"""
-def print_tree(parent):
-    for pre, _, node in RenderTree(parent):
-        treestr = u"%s%s" % (pre, node.name)
-        print(treestr.ljust(8), node.is_folder, node.is_file)
-"""
+# ── MEGA tree builder ────────────────────────────────────────────────────────
+# file_list: list of dicts with keys: name, path, size, is_dir, id
+# path is the parent path string (e.g. "FolderA/SubB/"), name is the node name.
 
+def make_mega_tree(file_list: list) -> dict:
+    """
+    Build a nested file tree from the flat list produced by
+    mega_download._walk_mega_node and return the standard
+    {"files": [...], "engine": "mega"} dict that page.html understands.
+    """
+    parent = TorNode("MEGA")
+    folder_id = 0
+    path_to_node: dict[str, TorNode] = {"": parent}
+
+    # Sort folders by depth so parents are created before children.
+    folders = sorted(
+        [f for f in file_list if f["is_dir"]],
+        key=lambda x: x["path"].count("/"),
+    )
+    for f in folders:
+        full_path = f"{f['path']}{f['name']}".rstrip("/")
+        if full_path in path_to_node:
+            continue
+        parent_path = f["path"].rstrip("/")
+        parent_node = path_to_node.get(parent_path, parent)
+        path_to_node[full_path] = TorNode(
+            f["name"],
+            is_folder=True,
+            parent=parent_node,
+            file_id=folder_id,
+        )
+        folder_id += 1
+
+    for f in file_list:
+        if f["is_dir"]:
+            continue
+        parent_path = f["path"].rstrip("/")
+        parent_node = path_to_node.get(parent_path, parent)
+        TorNode(
+            f["name"],
+            is_file=True,
+            parent=parent_node,
+            size=f["size"],
+            # honour previously-stored selection if present in the dict
+            priority=1 if f.get("selected", True) else 0,
+            file_id=f["id"],
+            progress=0,
+        )
+
+    result = create_list(parent)
+    return {"files": result, "engine": "mega"}
+
+
+def make_terabox_tree(file_list):
+    parent = TorNode("TERABOX")
+    folder_id = 0
+    path_to_node = {"": parent}
+
+    folders = sorted(
+        [f for f in file_list if f["is_dir"]],
+        key=lambda x: x["path"].count("/"),
+    )
+    for f in folders:
+        full_path = f"{f['path']}".rstrip("/")
+        if full_path in path_to_node:
+            continue
+        parent_path = f["path"].rstrip("/").rsplit("/", 1)[0]
+        parent_node = path_to_node.get(parent_path, parent)
+        path_to_node[full_path] = TorNode(
+            f["name"],
+            is_folder=True,
+            parent=parent_node,
+            file_id=folder_id,
+        )
+        folder_id += 1
+
+    for f in file_list:
+        if f["is_dir"]:
+            continue
+        parent_path = f["path"].rstrip("/").rsplit("/", 1)[0]
+        parent_node = path_to_node.get(parent_path, parent)
+        TorNode(
+            f["name"],
+            is_file=True,
+            parent=parent_node,
+            size=f["size"],
+            priority=1,
+            file_id=f["id"],
+            progress=0,
+        )
+
+    result = create_list(parent)
+    return {"files": result, "engine": "terabox"}
+
+
+def make_rclone_tree(file_list):
+    parent = TorNode("RCLONE")
+    folder_id = 0
+    path_to_node = {"": parent}
+
+    for f in sorted(file_list, key=lambda x: x.get("path", "")):
+        full = (f.get("path") or "").strip("/")
+        if not full:
+            continue
+        parts = full.split("/")
+        cur = parent
+        cur_path = ""
+        for comp in parts[:-1]:
+            cur_path = f"{cur_path}/{comp}" if cur_path else comp
+            node = path_to_node.get(cur_path)
+            if node is None:
+                node = TorNode(
+                    comp, is_folder=True, parent=cur, file_id=folder_id
+                )
+                folder_id += 1
+                path_to_node[cur_path] = node
+            cur = node
+        TorNode(
+            parts[-1],
+            is_file=True,
+            parent=cur,
+            size=f.get("size", 0),
+            priority=1,
+            file_id=f.get("id", full),
+            progress=0,
+        )
+
+    result = create_list(parent)
+    return {"files": result, "engine": "rclone"}
+
+
+# ── shared helpers ───────────────────────────────────────────────────────────
 
 def create_list(parent, contents=None):
     if contents is None:
@@ -195,90 +324,35 @@ def create_list(parent, contents=None):
     return contents
 
 
-def make_mega_tree(file_list):
-    """
-    Build a file-tree from a flat MEGA file list.
-
-    Each entry in file_list must be a dict:
-        {
-            "name":     str,           # full relative path, e.g. "folderA/sub/file.mkv"
-            "size":     int,           # bytes
-            "handle":   str,           # MEGA node handle (used as unique file id)
-            "selected": bool,          # True = included in download
-        }
-
-    Returns the same {"files": [...], "engine": "mega"} shape that make_tree() produces
-    so the existing page.html / wserver logic works without changes.
-    """
-    parent = TorNode("MEGA")
-    folder_id = 0
-
-    for item in file_list:
-        parts = [p for p in item["name"].replace("\\", "/").split("/") if p]
-        if not parts:
-            continue
-
-        previous_node = parent
-        # create / navigate folder nodes for every component except the last
-        for folder_name in parts[:-1]:
-            existing = next(
-                (c for c in previous_node.children if c.name == folder_name and c.is_folder),
-                None,
-            )
-            if existing is None:
-                previous_node = TorNode(
-                    folder_name,
-                    is_folder=True,
-                    parent=previous_node,
-                    file_id=f"mega_folder_{folder_id}",
-                )
-                folder_id += 1
-            else:
-                previous_node = existing
-
-        # leaf file node
-        TorNode(
-            parts[-1],
-            is_file=True,
-            parent=previous_node,
-            size=item.get("size", 0),
-            priority=1 if item.get("selected", True) else 0,
-            file_id=item["handle"],
-            progress=item.get("progress", 0),
-        )
-
-    result = create_list(parent)
-    return {"files": result, "engine": "mega"}
-
-
-def extract_mega_handles(data):
-    """
-    Walk the file-tree returned by make_mega_tree / create_list and split node
-    handles into selected and unselected lists.
-
-    Returns (selected_handles: list[str], unselected_handles: list[str])
-    """
-    selected = []
-    unselected = []
-    for item in data:
-        if item.get("type") == "file":
-            (selected if item.get("selected") else unselected).append(str(item["id"]))
-        if item.get("children"):
-            s, u = extract_mega_handles(item["children"])
-            selected.extend(s)
-            unselected.extend(u)
-    return selected, unselected
-
-
 def extract_file_ids(data):
+    """
+    Accept either:
+      • the new compact form  {"selected_ids": [...], "unselected_ids": [...]}
+      • the legacy nested list that page.html POSTs
+    Returns (selected_files, unselected_files) as lists of strings.
+    """
+    if isinstance(data, dict) and (
+        "selected_ids" in data or "unselected_ids" in data
+    ):
+        selected_files = [str(x) for x in data.get("selected_ids", []) or []]
+        unselected_files = [str(x) for x in data.get("unselected_ids", []) or []]
+        return selected_files, unselected_files
+
     selected_files = []
     unselected_files = []
+    if not isinstance(data, list):
+        return selected_files, unselected_files
     for item in data:
+        if not isinstance(item, dict):
+            continue
         if item.get("type") == "file":
+            file_id = item.get("id")
+            if file_id is None:
+                continue
             if item.get("selected"):
-                selected_files.append(str(item["id"]))
+                selected_files.append(str(file_id))
             else:
-                unselected_files.append(str(item["id"]))
+                unselected_files.append(str(file_id))
         if item.get("children"):
             child_selected, child_unselected = extract_file_ids(item["children"])
             selected_files.extend(child_selected)
