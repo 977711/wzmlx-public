@@ -465,14 +465,22 @@ def add_handlers():
                 BOT_COMMANDS, "Login", "[password] Login to Bot", 14
             )
 
-        TgClient.bot.set_bot_commands(
-            [
-                BotCommand(
-                    cmds[0] if isinstance(cmds, list) else cmds,
-                    description,
-                )
-                for cmd, description in BOT_COMMANDS.items()
-                for cmds in [getattr(BotCommands, f"{cmd}Command", None)]
-                if cmds is not None
-            ]
-        )
+        _cmds = [
+            BotCommand(
+                cmds[0] if isinstance(cmds, list) else cmds,
+                description,
+            )
+            for cmd, description in BOT_COMMANDS.items()
+            for cmds in [getattr(BotCommands, f"{cmd}Command", None)]
+            if cmds is not None
+        ]
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(TgClient.bot.set_bot_commands(_cmds))
+            else:
+                loop.run_until_complete(TgClient.bot.set_bot_commands(_cmds))
+        except Exception as e:
+            from .. import LOGGER as _LOGGER
+            _LOGGER.warning(f"set_bot_commands failed: {e}")
