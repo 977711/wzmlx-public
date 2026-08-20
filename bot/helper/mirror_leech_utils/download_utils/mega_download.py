@@ -8,7 +8,7 @@ from mega import MegaApi, MegaCancelToken
 
 from .... import LOGGER, task_dict, task_dict_lock, user_data
 from ....core.config_manager import Config
-from ...telegram_helper.message_utils import send_status_message
+from ...telegram_helper.message_utils import send_status_message, send_message
 from ...ext_utils.task_manager import (
     check_running_tasks,
     limit_checker,
@@ -20,8 +20,13 @@ from ...ext_utils.links_utils import get_mega_subfolder_handle, is_mega_folder_l
 from ...listeners.mega_listener import AsyncMega, MegaAppListener, MegaFolderListener, _mega_error_format
 from ...mirror_leech_utils.status_utils.mega_status import MegaDownloadStatus
 from ...mirror_leech_utils.status_utils.queue_status import QueueStatus
-from ...telegram_helper.message_utils import send_message
-from web.wserver import _derive_pin, mega_cleanup, mega_get_selection, mega_register_task
+
+try:
+    from web.wserver import _derive_pin, mega_cleanup, mega_get_selection, mega_register_task
+    _MEGA_SELECTION_AVAILABLE = True
+except Exception as _import_err:
+    LOGGER.warning(f"Mega file selection unavailable (wserver import failed): {_import_err}")
+    _MEGA_SELECTION_AVAILABLE = False
 
 
 _ACTIVE_MEGA_LINKS = set()
@@ -126,27 +131,45 @@ async def _maybe_await_mega_selection(listener, node, correct_api, gid):
     Returns (selected_handles, unselected_handles) if the user submitted a
     selection, or (None, None) to mean "download everything".
     """
-    if not Config.BASE_URL:
+    # Debug log so we can see exactly what values are present
+    base_url = getattr(Config, "BASE_URL", None) or getattr(Config, "base_url", None)
+    LOGGER.info(f"Mega selection check: available={_MEGA_SELECTION_AVAILABLE}, BASE_URL={base_url!r}")
+
+    if not _MEGA_SELECTION_AVAILABLE:
+        return None, None
+
+    if not base_url:
+        LOGGER.warning("Mega: BASE_URL not set — skipping file selection UI")
         return None, None
 
     file_list = await sync_to_async(_collect_mega_files, correct_api, node)
+    LOGGER.info(f"Mega: collected {len(file_list)} files for selection")
+
     if len(file_list) <= 1:
         return None, None
 
     mega_register_task(gid, file_list, name=listener.name)
 
     pin = _derive_pin(gid)
-    sel_url = f"{Config.BASE_URL.rstrip('/')}/app/files?gid={gid}&pin={pin}"
+    sel_url = f"{base_url.rstrip('/')}/app/files?gid={gid}&pin={pin}"
 
-    await send_message(
-        listener.message,
-        f"<b>📂 MEGA File Selection</b>\n\n"
-        f"<b>{len(file_list)} files</b> found in this folder.\n"
-        f"Choose which ones to download:\n\n"
-        f"<a href='{sel_url}'>🔗 Open File Selector</a>\n\n"
-        f"<i>Waiting up to 5 minutes. "
-        f"If you don't select, all files will be downloaded.</i>",
-    )
+    LOGGER.info(f"Mega: sending selection URL to user: {sel_url}")
+
+    try:
+        await send_message(
+            listener.message,
+            f"<b>📂 MEGA File Selection</b>\n\n"
+            f"<b>{len(file_list)} files</b> found in this folder.\n"
+            f"Choose which ones to download:\n\n"
+            f"<a href='{sel_url}'>🔗 Open File Selector</a>\n\n"
+            f"<i>Waiting up to 5 minutes. "
+            f"If you don't select, all files will be downloaded.</i>",
+        )
+        LOGGER.info("Mega: selection message sent successfully")
+    except Exception as e:
+        LOGGER.error(f"Mega: failed to send selection message: {e}", exc_info=True)
+        mega_cleanup(gid)
+        return None, None
 
     LOGGER.info(f"Mega: waiting for file selection, gid={gid}, files={len(file_list)}")
 
@@ -185,6 +208,7 @@ async def add_mega_download(listener, path):
 
     async_api = None
     mega_base = ""
+    is_folder = is_mega_folder_link(listener.link)
     try:
         sdk_gid = token_hex(5)
         await makedirs(path, exist_ok=True)
@@ -199,7 +223,6 @@ async def add_mega_download(listener, path):
         api.addListener(mega_listener)
         api._listener_ref = mega_listener
 
-        is_folder = is_mega_folder_link(listener.link)
         subfolder_handle = get_mega_subfolder_handle(listener.link)
 
         if is_folder:
@@ -213,8 +236,7 @@ async def add_mega_download(listener, path):
             # --- PREMIUM AUTHENTICATION FIX ---
             if mega_email and mega_password:
                 LOGGER.info("Mega: authenticating premium account for folder download")
-                
-                # 1. Login to the main API first
+
                 await async_api.login(mega_email, mega_password)
                 if listener.is_cancelled or async_api._mega_listener.is_cancelled:
                     return
@@ -222,7 +244,6 @@ async def add_mega_download(listener, path):
                     await listener.on_download_error(_mega_error_format(async_api._mega_listener.error))
                     return
 
-                # 2. Extract local auth and apply it instantly to avoid IP bans
                 account_auth = api.getAccountAuth()
                 if not account_auth:
                     await listener.on_download_error("Failed to obtain MEGA account authentication.")
@@ -264,6 +285,7 @@ async def add_mega_download(listener, path):
             else:
                 node = dl_listener.node
         else:
+            folder_api = None
             dl_listener = mega_listener
             if mega_email and mega_password:
                 await async_api.login(mega_email, mega_password)
@@ -290,22 +312,20 @@ async def add_mega_download(listener, path):
         listener.size = dl_listener._size
         if not listener.size and node:
             try:
-                correct_api = folder_api if node == dl_listener.node and is_folder else api
+                correct_api = folder_api if is_folder else api
                 listener.size = await sync_to_async(correct_api.getSize, node)
             except Exception as e:
                 LOGGER.info("Mega: correct_api getSize exception: %s", e)
+
         gid = token_hex(5)
 
         # ── MEGA file selection ───────────────────────────────────────────────
-        # Only runs for folder links with >1 file and when BASE_URL is set.
         if is_folder:
-            correct_api = folder_api if is_folder else api
             selected_handles, unselected_handles = await _maybe_await_mega_selection(
-                listener, node, correct_api, gid
+                listener, node, folder_api, gid
             )
             if listener.is_cancelled:
                 return
-            # If user deselected everything, abort
             if selected_handles is not None and len(selected_handles) == 0:
                 await listener.on_download_error("No files selected. Download cancelled.")
                 return
@@ -350,7 +370,6 @@ async def add_mega_download(listener, path):
             download_path = os.path.join(path, listener.name)
             await makedirs(download_path, exist_ok=True)
 
-        # Build a set of selected handles for fast lookup during download
         selected_handle_set = set(selected_handles) if selected_handles else None
 
         for attempt in range(5):
@@ -362,9 +381,6 @@ async def add_mega_download(listener, path):
             dl_listener._total_downloaded_bytes = 0
             dl_listener._caller_manages_completion = False
 
-            # If the user made a selection, filter the node to only selected files.
-            # For a folder link we resolve individual child nodes and download each;
-            # for a single file the handle set will be None so we download as normal.
             if selected_handle_set and is_folder:
                 download_errors = []
                 children_flat = _collect_mega_files(folder_api, node)
@@ -381,7 +397,6 @@ async def add_mega_download(listener, path):
                     if not child_node:
                         LOGGER.warning(f"Mega: could not resolve node for handle {file_info['handle']}, skipping")
                         continue
-                    # Preserve sub-folder structure inside download_path
                     parts = file_info["name"].replace("\\", "/").split("/")
                     sub_dir = os.path.join(download_path, *parts[:-1]) if len(parts) > 1 else download_path
                     await makedirs(sub_dir, exist_ok=True)
@@ -406,7 +421,6 @@ async def add_mega_download(listener, path):
                     await async_api.wait_for_transfer()
                     if dl_listener.retryable_error:
                         download_errors.append(file_info["name"])
-                # After all selected files, treat any retryable errors as the loop error
                 if download_errors:
                     dl_listener.retryable_error = f"Failed: {', '.join(download_errors[:3])}"
                 else:
@@ -444,11 +458,11 @@ async def add_mega_download(listener, path):
             if not is_folder:
                 with suppress(Exception):
                     await async_api.logout()
-                if async_api.api is not None and async_api._mega_listener is not None:
-                    with suppress(Exception):
-                        async_api.api.removeListener(async_api._mega_listener)
-                if async_api.folder_api is not None and async_api._folder_listener is not None:
-                    with suppress(Exception):
-                        async_api.folder_api.removeListener(async_api._folder_listener)
+            if async_api.api is not None and async_api._mega_listener is not None:
+                with suppress(Exception):
+                    async_api.api.removeListener(async_api._mega_listener)
+            if async_api.folder_api is not None and async_api._folder_listener is not None:
+                with suppress(Exception):
+                    async_api.folder_api.removeListener(async_api._folder_listener)
         await _release_link(listener.link)
         await clean_download(mega_base)
