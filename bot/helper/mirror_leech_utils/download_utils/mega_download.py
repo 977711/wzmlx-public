@@ -8,7 +8,7 @@ from mega import MegaApi, MegaCancelToken
 
 from .... import LOGGER, task_dict, task_dict_lock, user_data
 from ....core.config_manager import Config
-from ...telegram_helper.message_utils import send_status_message
+from ...telegram_helper.message_utils import send_status_message, send_message
 from ...ext_utils.task_manager import (
     check_running_tasks,
     limit_checker,
@@ -223,9 +223,13 @@ async def add_mega_download(listener, path):
                     pin = _derive_pin(mgid)
 
                     # Send the selection URL to the user via Telegram
+                    # IMPORTANT: use send_message, NOT on_download_error.
+                    # on_download_error cancels and tears down the task immediately,
+                    # which kills the session before the user can submit their selection.
                     base_url = getattr(Config, "BASE_URL", "").rstrip("/")
                     select_url = f"{base_url}/app/files?gid={mgid}&pin={pin}&engine=mega"
-                    await listener.on_download_error(
+                    await send_message(
+                        listener.message,
                         f"📂 <b>Mega File Selection</b>\n\n"
                         f"Select which files to download:\n{select_url}\n\n"
                         f"⏳ You have {_MEGA_SELECT_TIMEOUT // 60} minutes to choose."
