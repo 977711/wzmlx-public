@@ -106,19 +106,6 @@ async def main():
     )
     bot_loop.create_task(search_images())
 
-    # Register handlers inside the running loop so Pyrogram's async
-    # calls (set_bot_commands) don't conflict with the event loop.
-    from .core.handlers import add_handlers as _add_handlers
-    from .helper.ext_utils.bot_utils import create_help_buttons as _create_help_buttons
-    from .helper.listeners.aria2_listener import add_aria2_callbacks as _add_aria2_callbacks
-
-    _add_aria2_callbacks()
-    _create_help_buttons()
-    _add_handlers()
-
-    from .modules import restart_notification as _restart_notification
-    await _restart_notification()
-
 
 bot_loop.run_until_complete(main())
 
@@ -135,6 +122,18 @@ def _handle_asyncio_exception(loop, context):
 
 
 bot_loop.set_exception_handler(_handle_asyncio_exception)
+
+from .core.handlers import add_handlers
+from .helper.ext_utils.bot_utils import create_help_buttons
+from .helper.listeners.aria2_listener import add_aria2_callbacks
+
+add_aria2_callbacks()
+create_help_buttons()
+add_handlers()
+
+from .modules import restart_notification
+
+bot_loop.run_until_complete(restart_notification())
 
 from .core.plugin_manager import get_plugin_manager
 from .modules.plugin_manager import register_plugin_commands

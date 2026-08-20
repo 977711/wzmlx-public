@@ -497,13 +497,6 @@
         let currentFolder = null;
         let files = [];
         let allowEdit = false;
-        let currentEngine = '';  // set after PIN submit; 'mega' triggers /app/files/mega
-
-        function _apiEndpoint() {
-            return currentEngine === 'mega'
-                ? `/app/files/mega?gid=${urlParams.gid}&pin=${pinInput.value}`
-                : `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}`;
-        }
 
         function formatSize(size) {
             const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -950,9 +943,7 @@
             modalBody.innerHTML = `<p>Submitting, ${checkedFilesEl.innerText} file(s)... </p>`;
             modalFooter.innerHTML = '';
             openModal();
-            const requestUrl = currentEngine === 'mega'
-                ? `/app/files/mega?gid=${urlParams.gid}&pin=${pinInput.value}`
-                : `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}&mode=selection`;
+            const requestUrl = `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}&mode=selection`;
             fetch(requestUrl, { 'method': 'POST', 'body': JSON.stringify(files) }).then(response => {
                 if (reusableModal.style.display === 'block') {
                     closeModal();
@@ -990,13 +981,8 @@
                 openModal();
                 return false;
             }
-            // Detect engine from URL param (set by bot when sending the link)
-            // Fallback: try /mega first if engine=mega param present, else use torrent endpoint
-            const engineParam = urlParams.engine || '';
-            const fetchEndpoint = engineParam === 'mega'
-                ? `/app/files/mega?gid=${urlParams.gid}&pin=${pinInput.value}`
-                : `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}&mode=get`;
-            fetch(fetchEndpoint).then(function (response) {
+            const requestUrl = `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}&mode=get`;
+            fetch(requestUrl).then(function (response) {
                 if (response.ok) {
                     return response.json().then(data => {
                         if (data.error) {
@@ -1006,7 +992,6 @@
                             openModal();
                         } else {
                             files = data.files;
-                            currentEngine = data.engine || engineParam;
                             allowEdit = data.engine === "qbittorrent";
                             pinEntry.classList.add('fadeOut');
                             setTimeout(() => {
