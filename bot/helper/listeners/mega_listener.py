@@ -1165,6 +1165,3 @@ class MegaFolderListener(MegaListener):
 
     def onMountChanged(self, *args):
         pass
-
-
-
