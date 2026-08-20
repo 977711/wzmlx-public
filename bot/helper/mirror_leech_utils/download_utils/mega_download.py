@@ -1,5 +1,5 @@
 import os
-from asyncio import Event, Lock as AsyncLock, sleep as asleep
+from asyncio import Event, Lock as AsyncLock, sleep as asleep, wait_for, TimeoutError as AsyncTimeoutError
 from contextlib import suppress
 from secrets import token_hex
 
@@ -311,79 +311,83 @@ async def add_mega_download(listener, path):
 
         # ── FILE SELECTION (listener.select == True) ──────────────────────
         if listener.select:
-            # Build the flat file-list so wserver can render it as a tree.
-            use_api = folder_api if is_folder else api
-            try:
-                file_list = await sync_to_async(_walk_mega_node, use_api, node)
-            except Exception as e:
-                LOGGER.error(f"Mega: failed to walk node tree: {e}")
-                file_list = []
+            if not Config.BASE_URL:
+                LOGGER.warning("Mega: listener.select=True but BASE_URL is not set — skipping selection UI")
+                # Fall through to normal download without selection
+            else:
+                LOGGER.info(f"Mega: starting file-selection flow for gid={gid}")
+                use_api = folder_api if is_folder else api
 
-            # All files selected by default (priority=1 equivalent).
-            all_ids = [str(f["id"]) for f in file_list if not f["is_dir"]]
-            _store_write(gid, file_list, all_ids)
+                # Walk the node tree to produce a flat file-list for the web UI.
+                try:
+                    file_list = await sync_to_async(_walk_mega_node, use_api, node)
+                except Exception as e:
+                    LOGGER.error(f"Mega: failed to walk node tree: {e}")
+                    file_list = []
 
-            # Register the pending event so confirm_selection can wake us up.
-            sel_event = Event()
-            async with _PENDING_LOCK:
-                _PENDING_MEGA_SELECTIONS[gid] = (sel_event, listener.user_id)
+                LOGGER.info(f"Mega: file_list has {len(file_list)} entries (gid={gid})")
 
-            # Send the Telegram inline-keyboard with the web-UI link (same
-            # helper used by qbit/aria2 – it already supports the mega_ prefix
-            # in file_selector.py).
-            SBUTTONS = bt_selection_buttons(f"mega_{gid}")
-            await send_message(
-                listener.message,
-                "Your MEGA download is paused. Choose the files you want, then press Done Selecting.",
-                SBUTTONS,
-            )
+                # Persist: all files selected by default.
+                all_ids = [str(f["id"]) for f in file_list if not f["is_dir"]]
+                ok = _store_write(gid, file_list, all_ids)
+                if not ok:
+                    LOGGER.error(f"Mega: _store_write failed for gid={gid} — skipping selection")
+                else:
+                    # Register the pending event so confirm_selection can wake us.
+                    sel_event = Event()
+                    async with _PENDING_LOCK:
+                        _PENDING_MEGA_SELECTIONS[gid] = (sel_event, listener.user_id)
 
-            # Block until the user presses Done or Cancel (or times out after
-            # 10 minutes).
-            try:
-                await asleep(0)
-                import asyncio
-                await asyncio.wait_for(sel_event.wait(), timeout=600)
-            except asyncio.TimeoutError:
-                async with _PENDING_LOCK:
-                    _PENDING_MEGA_SELECTIONS.pop(gid, None)
-                _store_delete(gid)
-                await listener.on_download_error("MEGA file selection timed out.")
-                return
+                    # Build and send the Telegram inline keyboard.
+                    SBUTTONS = bt_selection_buttons(f"mega_{gid}")
+                    LOGGER.info(f"Mega: sending selection buttons for gid={gid}")
+                    await send_message(
+                        listener.message,
+                        "Your MEGA download is paused. Choose the files you want, then press Done Selecting.",
+                        SBUTTONS,
+                    )
 
-            # Check whether the user cancelled.
-            async with _PENDING_LOCK:
-                _PENDING_MEGA_SELECTIONS.pop(gid, None)
+                    # Block until Done / Cancel / 10-minute timeout.
+                    LOGGER.info(f"Mega: waiting for user selection (gid={gid})")
+                    try:
+                        await wait_for(sel_event.wait(), timeout=600)
+                    except AsyncTimeoutError:
+                        async with _PENDING_LOCK:
+                            _PENDING_MEGA_SELECTIONS.pop(gid, None)
+                        _store_delete(gid)
+                        await listener.on_download_error("MEGA file selection timed out.")
+                        return
 
-            if listener.is_cancelled:
-                _store_delete(gid)
-                return
+                    # Clean up pending registry.
+                    async with _PENDING_LOCK:
+                        _PENDING_MEGA_SELECTIONS.pop(gid, None)
 
-            state = _store_read(gid)
-            if state is None:
-                # cancel_mega_selection deletes the store before setting the event.
-                await listener.on_download_error("MEGA file selection was cancelled.")
-                return
+                    if listener.is_cancelled:
+                        _store_delete(gid)
+                        return
 
-            selected_ids = set(str(x) for x in state.get("selected_ids", []))
-            _store_delete(gid)
+                    state = _store_read(gid)
+                    if state is None:
+                        # cancel_mega_selection deleted the store before setting event.
+                        await listener.on_download_error("MEGA file selection was cancelled.")
+                        return
 
-            # Filter the flat list to only the chosen handles.
-            if selected_ids:
-                node = await _build_filtered_node_list(
-                    use_api, node, selected_ids, is_folder
-                )
-                # Recalculate size from selected files.
-                selected_size = sum(
-                    f["size"] for f in file_list
-                    if not f["is_dir"] and str(f["id"]) in selected_ids
-                )
-                listener.size = selected_size or listener.size
+                    selected_ids = set(str(x) for x in state.get("selected_ids", []))
+                    LOGGER.info(f"Mega: user selected {len(selected_ids)} file(s) (gid={gid})")
+                    _store_delete(gid)
 
-            # Re-check limits with the (potentially smaller) size.
-            if limit_exceeded := await limit_checker(listener):
-                await listener.on_download_error(limit_exceeded, is_limit=True)
-                return
+                    # Recalculate size from selected files only.
+                    if selected_ids:
+                        selected_size = sum(
+                            f["size"] for f in file_list
+                            if not f["is_dir"] and str(f["id"]) in selected_ids
+                        )
+                        listener.size = selected_size or listener.size
+
+                    # Re-check limits with the (potentially smaller) size.
+                    if limit_exceeded := await limit_checker(listener):
+                        await listener.on_download_error(limit_exceeded, is_limit=True)
+                        return
         # ── END FILE SELECTION ────────────────────────────────────────────
 
         added_to_queue, event = await check_running_tasks(listener)
