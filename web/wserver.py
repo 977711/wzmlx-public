@@ -29,7 +29,7 @@ from fastapi.templating import Jinja2Templates
 from sabnzbdapi import SabnzbdClient
 from aioqbt.exc import AQError
 
-from web.nodes import extract_file_ids, make_tree
+from web.nodes import extract_file_ids, extract_mega_handles, make_mega_tree, make_tree
 from aiohttp import ClientSession
 
 getLogger("httpx").setLevel(WARNING)
@@ -57,6 +57,32 @@ _PIN_RATE_WINDOW = 60
 _pin_attempts: dict = {}
 
 _cached_secret_bytes = None
+
+# ── MEGA file-selection store ──────────────────────────────────────────────────
+# Keyed by gid (same token used in the Telegram message URL).
+# _mega_tasks[gid]     = {"files": [...flat-list...], "name": str}  (set by bot)
+# _mega_selections[gid] = {"selected": [...handles...], "unselected": [...]}  (set by web)
+_mega_tasks: dict = {}
+_mega_selections: dict = {}
+
+
+def mega_register_task(gid: str, file_list: list, name: str = ""):
+    """Called from the bot side to register a MEGA download's file list."""
+    _mega_tasks[gid] = {"files": file_list, "name": name}
+
+
+def mega_get_selection(gid: str):
+    """
+    Called from the bot side (blocking via sync_to_async) to retrieve what the
+    user picked.  Returns None if the user hasn't submitted yet.
+    """
+    return _mega_selections.pop(gid, None)
+
+
+def mega_cleanup(gid: str):
+    _mega_tasks.pop(gid, None)
+    _mega_selections.pop(gid, None)
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _load_config():
@@ -402,6 +428,51 @@ async def set_aria2(gid, selected_files):
         LOGGER.info(f"Verified! Gid: {gid}")
     else:
         LOGGER.info(f"Verification Failed! Report! Gid: {gid}")
+
+
+@app.api_route(
+    "/app/files/mega", methods=["GET", "POST"], response_class=JSONResponse
+)
+async def handle_mega(request: Request):
+    params = request.query_params
+
+    if not (gid := params.get("gid")):
+        return JSONResponse({"files": [], "engine": "", "error": "GID is missing", "message": "gid not specified"})
+
+    if not _SAFE_GID.match(gid):
+        return JSONResponse({"files": [], "engine": "", "error": "Invalid GID", "message": "gid contains invalid characters"})
+
+    if not (pin := params.get("pin")):
+        return JSONResponse({"files": [], "engine": "", "error": "Pin is missing", "message": "PIN not specified"})
+
+    if _pin_rate_limited(gid):
+        return JSONResponse(
+            {"files": [], "engine": "", "error": "Too many attempts",
+             "message": f"Too many PIN attempts. Try again in {_PIN_RATE_WINDOW}s."},
+            status_code=429,
+        )
+
+    if not _verify_pin(gid, pin):
+        _record_pin_attempt(gid)
+        return JSONResponse({"files": [], "engine": "", "error": "Invalid pin", "message": "The PIN you entered is incorrect. Try Again!"})
+    _pin_attempts.pop(gid, None)
+
+    task = _mega_tasks.get(gid)
+    if not task:
+        return JSONResponse({"files": [], "engine": "", "error": "Task not found", "message": "No MEGA task registered for this GID."})
+
+    if request.method == "POST":
+        mode = params.get("mode", "selection")
+        if mode == "selection":
+            data = await request.json()
+            selected, unselected = extract_mega_handles(data)
+            _mega_selections[gid] = {"selected": selected, "unselected": unselected}
+            return JSONResponse({"files": [], "engine": "mega", "error": "", "message": "Selection submitted successfully."})
+        return JSONResponse({"files": [], "engine": "", "error": "Unknown mode", "message": f"Mode '{mode}' is not supported for MEGA."})
+
+    # GET — build and return the tree
+    content = make_mega_tree(task["files"])
+    return JSONResponse(content)
 
 
 @app.get("/", response_class=HTMLResponse)
