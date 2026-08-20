@@ -209,50 +209,71 @@ async def add_mega_download(listener, path):
                 node = dl_listener.node
 
             # ── File selection (only for folder links with -s flag) ────────────
+            LOGGER.info("Mega: select flag=%s", getattr(listener, "select", False))
             if getattr(listener, "select", False):
-                # Build the tree from the Mega SDK node
-                raw_items = await sync_to_async(
-                    mega_node_children_to_list, node, folder_api
-                )
-                LOGGER.info("Mega: raw_items count=%d for file selection", len(raw_items) if raw_items else 0)
+                try:
+                    # Build the tree from the Mega SDK node
+                    LOGGER.info("Mega: calling mega_node_children_to_list node=%s", node)
+                    raw_items = await sync_to_async(
+                        mega_node_children_to_list, node, folder_api
+                    )
+                    LOGGER.info("Mega: raw_items count=%d for file selection", len(raw_items) if raw_items else 0)
+                except Exception as e:
+                    LOGGER.error("Mega: mega_node_children_to_list failed: %s", e, exc_info=True)
+                    await listener.on_download_error(f"Mega file listing failed: {e}")
+                    return
+
                 if not raw_items:
                     await listener.on_download_error(
                         "Mega folder appears empty or could not be listed. Cannot show file selector."
                     )
                     return
 
-                # Store raw_items directly — mega_node_children_to_list already
-                # returns the exact dict shape the frontend expects, so no TorNode
-                # round-trip via make_mega_tree is needed (that was producing []).
-                # Create the asyncio.Event here on bot_loop so wait_for works
-                # correctly and mega_session_submit can set it via call_soon_threadsafe.
-                from asyncio import Event as AsyncEvent
-                from web.wserver import mega_session_get, mega_session_pop, _derive_pin, _MEGA_SESSIONS
-                mgid = token_hex(5)
-                sel_event = AsyncEvent()
-                _MEGA_SESSIONS[mgid] = {
-                    "files": raw_items,
-                    "event": sel_event,
-                    "selected": None,
-                }
-                pin = _derive_pin(mgid)
+                try:
+                    # Use mega_session_create() so the asyncio.Event is registered
+                    # on the wserver bot_loop — required for mega_session_submit()'s
+                    # call_soon_threadsafe to correctly wake our wait_for() below.
+                    from web.wserver import mega_session_create, mega_session_get, mega_session_pop, _derive_pin
+                    mgid = token_hex(5)
+                    mega_session_create(mgid, raw_items)
+                    pin = _derive_pin(mgid)
+                    LOGGER.info("Mega: session created mgid=%s pin=%s", mgid, pin)
+                except Exception as e:
+                    LOGGER.error("Mega: session creation failed: %s", e, exc_info=True)
+                    await listener.on_download_error(f"Mega session creation failed: {e}")
+                    return
 
-                # Send the selection URL to the user via Telegram.
-                # IMPORTANT: use send_message, NOT on_download_error.
-                # on_download_error cancels and tears down the task immediately,
-                # which kills the session before the user can submit their selection.
-                base_url = getattr(Config, "BASE_URL", "").rstrip("/")
-                select_url = f"{base_url}/app/files?gid={mgid}&pin={pin}&engine=mega"
-                await send_message(
-                    listener.message,
-                    f"📂 <b>Mega File Selection</b>\n\n"
-                    f"Select which files to download:\n{select_url}\n\n"
-                    f"⏳ You have {_MEGA_SELECT_TIMEOUT // 60} minutes to choose."
-                )
+                try:
+                    # Send the selection URL to the user via Telegram.
+                    # IMPORTANT: use send_message, NOT on_download_error.
+                    # on_download_error cancels and tears down the task immediately,
+                    # which kills the session before the user can submit their selection.
+                    #
+                    # URL points to /app/files/torrent which serves page.html.
+                    # The engine=mega param tells the frontend JS to hit /app/files/mega
+                    # for data and submission instead of the torrent endpoint.
+                    base_url = getattr(Config, "BASE_URL", "").rstrip("/")
+                    select_url = f"{base_url}/app/files/torrent?gid={mgid}&pin={pin}&engine=mega"
+                    LOGGER.info("Mega: sending selection URL: %s", select_url)
+                    await send_message(
+                        listener.message,
+                        f"📂 <b>Mega File Selection</b>\n\n"
+                        f"Select which files to download:\n{select_url}\n\n"
+                        f"⏳ You have {_MEGA_SELECT_TIMEOUT // 60} minutes to choose."
+                    )
+                    LOGGER.info("Mega: selection URL sent, waiting for user response...")
+                except Exception as e:
+                    LOGGER.error("Mega: failed to send selection URL: %s", e, exc_info=True)
+                    mega_session_pop(mgid)
+                    await listener.on_download_error(f"Mega failed to send selection link: {e}")
+                    return
 
                 # Wait for the user to submit their selection via the web UI.
+                # Read the event from the session so we use the same Event object
+                # that mega_session_submit() will call .set() on.
+                _sel_session = mega_session_get(mgid)
                 try:
-                    await wait_for(sel_event.wait(), timeout=_MEGA_SELECT_TIMEOUT)
+                    await wait_for(_sel_session["event"].wait(), timeout=_MEGA_SELECT_TIMEOUT)
                 except AsyncTimeoutError:
                     mega_session_pop(mgid)
                     await listener.on_download_error(
