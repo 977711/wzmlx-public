@@ -1,10 +1,10 @@
 # ruff: noqa: E402
-try:
-    from uvloop import install
+# try:
+#     from uvloop import install
 
-    install()
-except ImportError:
-    pass
+#     install()
+# except ImportError:
+#     pass
 
 
 from asyncio import new_event_loop, set_event_loop
