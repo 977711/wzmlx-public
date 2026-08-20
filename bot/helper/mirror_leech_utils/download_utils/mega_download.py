@@ -1,5 +1,5 @@
 import os
-from asyncio import Lock as AsyncLock, sleep as asleep
+from asyncio import Lock as AsyncLock, sleep as asleep, wait_for, TimeoutError as AsyncTimeoutError
 from contextlib import suppress
 from secrets import token_hex
 
@@ -8,7 +8,8 @@ from mega import MegaApi, MegaCancelToken
 
 from .... import LOGGER, task_dict, task_dict_lock, user_data
 from ....core.config_manager import Config
-from ...telegram_helper.message_utils import send_status_message
+from ...telegram_helper.message_utils import send_status_message, send_message
+from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.task_manager import (
     check_running_tasks,
     limit_checker,
@@ -24,10 +25,14 @@ from ...listeners.mega_listener import (
 )
 from ...mirror_leech_utils.status_utils.mega_status import MegaDownloadStatus
 from ...mirror_leech_utils.status_utils.queue_status import QueueStatus
+from web.nodes import mega_node_children_to_list
 
 
 _ACTIVE_MEGA_LINKS = set()
 _ACTIVE_MEGA_LINKS_LOCK = AsyncLock()
+
+# How long (seconds) to wait for the user to submit file selection via the web UI
+_MEGA_SELECT_TIMEOUT = 300
 
 _MEGA_BASE64_ALPHABET = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -89,6 +94,28 @@ def _make_cancel_token():
         return None
 
 
+def _get_node_by_handle_str(api, handle_str: str):
+    try:
+        handle_int = int(handle_str)
+        return api.getNodeByHandle(handle_int)
+    except Exception:
+        return None
+
+
+async def _collect_selected_nodes(folder_api, selected_handles: list):
+    """Return list of (MegaNode, name) for each selected file handle string."""
+    matched = []
+    for h in selected_handles:
+        node = await sync_to_async(_get_node_by_handle_str, folder_api, h)
+        if node and not node.isFolder():
+            try:
+                name = node.getName() or h
+            except Exception:
+                name = h
+            matched.append((node, name))
+    return matched
+
+
 async def _reserve_link(link: str):
     async with _ACTIVE_MEGA_LINKS_LOCK:
         if link in _ACTIVE_MEGA_LINKS:
@@ -121,6 +148,7 @@ async def add_mega_download(listener, path):
 
     async_api = None
     mega_base = ""
+    is_folder = False  # declared early so finally-block can reference it safely
     try:
         sdk_gid = token_hex(5)
         await makedirs(path, exist_ok=True)
@@ -143,7 +171,6 @@ async def add_mega_download(listener, path):
         if is_folder:
             async_api.folder_api = folder_api = MegaApi("", mega_dir, "WZML-X", 4)
 
-            # Authenticate folder API with the configured premium MEGA account.
             if mega_email and mega_password:
                 LOGGER.info("Mega: authenticating premium account for folder download")
                 await async_api.login(mega_email, mega_password)
@@ -193,6 +220,7 @@ async def add_mega_download(listener, path):
                     "Failed to get root node for MEGA folder"
                 )
                 return
+
             if subfolder_handle:
                 LOGGER.info("Mega: looking up subfolder handle=%s", subfolder_handle)
                 target_int = _mega_base64_to_int(subfolder_handle)
@@ -210,7 +238,6 @@ async def add_mega_download(listener, path):
                 dl_listener.node = node
                 dl_listener._cache_node_data(node)
                 LOGGER.info("Mega: subfolder name=%s", dl_listener._name)
-
                 dl_listener._size = listener.size
                 if not dl_listener._size:
                     try:
@@ -221,6 +248,164 @@ async def add_mega_download(listener, path):
                 LOGGER.info("Mega: subfolder size=%s", dl_listener._size)
             else:
                 node = dl_listener.node
+
+            # ── File selection (only for folder links with -s flag) ────────────
+            LOGGER.info("Mega: select flag=%s", getattr(listener, "select", False))
+            if getattr(listener, "select", False):
+                try:
+                    LOGGER.info("Mega: calling mega_node_children_to_list node=%s", node)
+                    raw_items = await sync_to_async(
+                        mega_node_children_to_list, node, folder_api
+                    )
+                    LOGGER.info("Mega: raw_items count=%d", len(raw_items) if raw_items else 0)
+                except Exception as e:
+                    LOGGER.error("Mega: mega_node_children_to_list failed: %s", e, exc_info=True)
+                    await listener.on_download_error(f"Mega file listing failed: {e}")
+                    return
+
+                if not raw_items:
+                    await listener.on_download_error(
+                        "Mega folder appears empty or could not be listed."
+                    )
+                    return
+
+                try:
+                    # mega_session_create() registers the asyncio.Event on the
+                    # wserver bot_loop so mega_session_submit()'s
+                    # call_soon_threadsafe correctly wakes our wait_for() below.
+                    from web.wserver import mega_session_create, mega_session_get, mega_session_pop, _derive_pin
+                    mgid = token_hex(5)
+                    mega_session_create(mgid, raw_items)
+                    pin = _derive_pin(mgid)
+                    LOGGER.info("Mega: session created mgid=%s pin=%s", mgid, pin)
+                except Exception as e:
+                    LOGGER.error("Mega: session creation failed: %s", e, exc_info=True)
+                    await listener.on_download_error(f"Mega session creation failed: {e}")
+                    return
+
+                try:
+                    # /app/files serves page.html. engine=mega tells the frontend
+                    # JS to hit /app/files/mega for data fetch and POST submission
+                    # instead of the torrent endpoint.
+                    base_url = getattr(Config, "BASE_URL", "").rstrip("/")
+                    select_url = f"{base_url}/app/files?gid={mgid}&pin={pin}&engine=mega"
+                    LOGGER.info("Mega: sending selection URL: %s", select_url)
+                    await send_message(
+                        listener.message,
+                        f"📂 <b>Mega File Selection</b>\n\n"
+                        f"Select which files to download:\n{select_url}\n\n"
+                        f"⏳ You have {_MEGA_SELECT_TIMEOUT // 60} minutes to choose."
+                    )
+                    LOGGER.info("Mega: selection URL sent, waiting for user response...")
+                except Exception as e:
+                    LOGGER.error("Mega: failed to send selection URL: %s", e, exc_info=True)
+                    mega_session_pop(mgid)
+                    await listener.on_download_error(f"Mega failed to send selection link: {e}")
+                    return
+
+                # Wait for user to submit; use the Event from the session dict so
+                # we wait on the exact object that mega_session_submit() will set.
+                _sel_session = mega_session_get(mgid)
+                try:
+                    await wait_for(_sel_session["event"].wait(), timeout=_MEGA_SELECT_TIMEOUT)
+                except AsyncTimeoutError:
+                    mega_session_pop(mgid)
+                    await listener.on_download_error(
+                        "Mega file selection timed out. Please retry with -s flag."
+                    )
+                    return
+
+                session = mega_session_get(mgid)
+                selected_handles = (session.get("selected") or []) if session else []
+                mega_session_pop(mgid)
+
+                if not selected_handles:
+                    await listener.on_download_error("No files were selected. Download cancelled.")
+                    return
+
+                LOGGER.info("Mega: user selected %d file(s) for mgid=%s", len(selected_handles), mgid)
+
+                selected_nodes = await _collect_selected_nodes(folder_api, selected_handles)
+                if not selected_nodes:
+                    await listener.on_download_error(
+                        "Could not resolve selected files. Download cancelled."
+                    )
+                    return
+
+                listener.name = listener.name or dl_listener._name or f"MEGA_Download_{token_hex(5)}"
+                download_path = os.path.join(path, listener.name)
+                await makedirs(download_path, exist_ok=True)
+
+                total_size = 0
+                for sel_node, _ in selected_nodes:
+                    try:
+                        total_size += int(sel_node.getSize())
+                    except Exception:
+                        pass
+                listener.size = total_size
+
+                gid = token_hex(5)
+                msg, button = await stop_duplicate_check(listener)
+                if msg:
+                    await listener.on_download_error(msg, button)
+                    return
+                if limit_exceeded := await limit_checker(listener):
+                    await listener.on_download_error(limit_exceeded, is_limit=True)
+                    return
+
+                added_to_queue, event = await check_running_tasks(listener)
+                if added_to_queue:
+                    async with task_dict_lock:
+                        task_dict[listener.mid] = QueueStatus(listener, gid, "dl")
+                    await listener.on_download_start()
+                    if listener.multi <= 1:
+                        await send_status_message(listener.message)
+                    await event.wait()
+                    if listener.is_cancelled:
+                        return
+
+                async with task_dict_lock:
+                    task_dict[listener.mid] = MegaDownloadStatus(listener, dl_listener, gid, "dl")
+
+                await listener.on_download_start()
+                if not added_to_queue and listener.multi <= 1:
+                    await send_status_message(listener.message)
+
+                for sel_node, file_name in selected_nodes:
+                    if listener.is_cancelled or dl_listener.is_cancelled:
+                        return
+                    for attempt in range(5):
+                        cancel_token = _make_cancel_token()
+                        dl_listener._cancel_token = cancel_token
+                        dl_listener.error = None
+                        dl_listener.retryable_error = None
+                        dl_listener._bytes_transferred = 0
+                        dl_listener._total_downloaded_bytes = 0
+                        dl_listener._caller_manages_completion = False
+
+                        await async_api.startDownload(
+                            sel_node, download_path, file_name, None, False,
+                            cancel_token, 3, 2, False,
+                        )
+                        await async_api.wait_for_transfer()
+
+                        if listener.is_cancelled or dl_listener.is_cancelled:
+                            return
+                        if not dl_listener.retryable_error:
+                            break
+                        if attempt >= 4:
+                            await listener.on_download_error(
+                                _mega_error_format(dl_listener.retryable_error)
+                            )
+                            return
+                        await clean_download(os.path.join(download_path, file_name))
+                        await asleep(2 ** attempt)
+
+                if not listener.is_cancelled and not dl_listener.is_cancelled:
+                    await listener.on_download_complete()
+                return
+            # ── end file-selection branch ─────────────────────────────────────
+
         else:
             dl_listener = mega_listener
             if mega_email and mega_password:
